@@ -140,30 +140,41 @@ Done! Your local database now has the schema and data your tests need.
 ```
 1. Tests run on REMOTE → Capture data
 2. seed-it generate → Connects to REMOTE to get schema
-3. You apply SQL → To your LOCAL database
+3. You apply SQL → To### Step 2: Save Data After Tests
+
+In your test file:
+
+```javascript
+const { interceptors } = require('seed-it');
+const { pool } = require('./db');
+
+describe('My Tests', function() {
+  it('should work', async function() {
+    const client = await pool.connect();
+    await client.query('SELECT * FROM users WHERE id = $1', [123]);
+    client.release();
+  });
+});
+
+// Save captured data after all tests
+after(async function() {
+  await interceptors.saveAll();
+  console.log('Saved to ./seed-it-output/captured-data.json');
+});
 ```
 
-**Example:**
-```javascript
-// seed-it.config.js - REMOTE databases
-module.exports = {
-  databases: [
-    { 
-      name: 'db1', 
-      host: 'dev-server.example.com',  // Remote!
-      port: 5432,
-      user: 'dev_user',
-      password: 'dev_password'
-    }
-  ]
-};
-```
+### Step 3: Generate Seeders
+
+Run the CLI command to generate migrations and seeders:
 
 ```bash
-# Apply to LOCAL database
-psql -h localhost -U localuser -d localdb \
-  -f seed-it-output/db1/migrations/initial_schema.up.sql
+npx seed-it generate
 ```
+
+This will:
+1. Read captured data from `./seed-it-output/captured-data.json`
+2. Connect to your remote database to analyze schema
+3. Generate SQL files in `./seed-it-output/`
 
 ## Configuration
 
@@ -218,7 +229,7 @@ Intercepts a `pg.Pool` instance to capture SELECT query results. **Automatically
 - `pool` - pg.Pool instance
 - `databaseName` - Name of the database (used in output and as registry key)
 - `config` - Optional configuration:
-  - `outputDir` - Output directory (default: `'./output'`)
+  - `outputDir` - Output directory (default: `'./seed-it-output'`)
   - `databases` - Array of database names to capture (default: `[databaseName]`)
   - `captureReads` - Capture SELECT queries (default: `true`)
   - `captureWrites` - Capture INSERT/UPDATE/DELETE (default: `false`)
@@ -267,8 +278,8 @@ npx seed-it generate [options]
 
 Options:
   -c, --config <path>           Path to configuration file
-  -i, --input <file>            Input file with captured data (default: ./output/captured-data.json)
-  -o, --output <dir>            Output directory (default: ./output)
+  -i, --input <file>            Input file with captured data (default: ./seed-it-output/captured-data.json)
+  -o, --output <dir>            Output directory (default: ./seed-it-output)
   --migration-name <name>       Migration name (default: initial_schema)
   --seeder-name <name>          Seeder name (default: initial_data)
   --split-seeders               Generate one seeder file per table
