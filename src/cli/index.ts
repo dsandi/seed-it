@@ -24,6 +24,7 @@ program
     .option('--db-name <name>', 'Database name')
     .option('--db-user <user>', 'Database user')
     .option('--db-password <password>', 'Database password')
+    .option('--debug', 'Enable debug logging to file')
     .action(generateCommand);
 
 program.parse();

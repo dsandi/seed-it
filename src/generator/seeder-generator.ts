@@ -14,8 +14,9 @@ export class SeederGenerator {
     /**
      * Extract INSERT data from captured queries
      */
-    extractInserts(queries: CapturedQuery[]): Map<string, Record<string, any>[]> {
+    extractInserts(queries: CapturedQuery[], debugLogger?: any): Map<string, Record<string, any>[]> {
         const rowsByTable = new Map<string, Record<string, any>[]>();
+        let ignoredCount = 0;
 
         for (const query of queries) {
             const normalized = query.query.trim().toUpperCase();
@@ -30,8 +31,21 @@ export class SeederGenerator {
                         rowsByTable.set(tableName, []);
                     }
                     rowsByTable.get(tableName)!.push(...rows);
+                } else if (debugLogger) {
+                    debugLogger.log('ignored_query', {
+                        reason: !tableName ? 'no_table_name' : 'no_rows',
+                        query: query.query,
+                        extractedTable: tableName,
+                        rowCount: rows.length
+                    });
                 }
+            } else {
+                ignoredCount++;
             }
+        }
+
+        if (debugLogger && ignoredCount > 0) {
+            debugLogger.log('ignored_non_data_queries', { count: ignoredCount });
         }
 
         return rowsByTable;
@@ -142,8 +156,24 @@ export class SeederGenerator {
         queries: CapturedQuery[],
         schemas: TableSchema[],
         outputDir: string,
-        seederName: string = 'initial_data'
+        seederName: string = 'initial_data',
+        debugLogger?: any
     ): Promise<string> {
+        // ...
+
+        // Extract INSERT data
+        const rowsByTable = this.extractInserts(queries, debugLogger);
+
+        if (debugLogger) {
+            debugLogger.log('extracted_rows', {
+                tables: Array.from(rowsByTable.keys()),
+                rowCounts: Object.fromEntries(
+                    Array.from(rowsByTable.entries()).map(([k, v]) => [k, v.length])
+                )
+            });
+        }
+
+        // ...
         const timestamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0];
         const fileName = `${timestamp}_${seederName}.sql`;
         const filePath = path.join(outputDir, 'seeders', fileName);
@@ -151,8 +181,7 @@ export class SeederGenerator {
         // Ensure directory exists
         await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
 
-        // Extract INSERT data
-        const rowsByTable = this.extractInserts(queries);
+
 
         // Deduplicate rows
         const deduplicated = this.deduplicator.deduplicateAll(rowsByTable, schemas);

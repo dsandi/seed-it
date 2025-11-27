@@ -5,6 +5,7 @@ import { SchemaAnalyzer } from '../analyzer/schema-analyzer';
 import { MigrationGenerator } from '../generator/migration-generator';
 import { SeederGenerator } from '../generator/seeder-generator';
 import { Config } from '../config';
+import { DebugLogger } from '../debug-logger';
 
 /**
  * Generate command handler
