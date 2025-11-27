@@ -88,12 +88,23 @@ export interface CaptureConfig {
     };
 }
 
+/**
+ * Column mapping configuration for calculated fields
+ */
+export interface ColumnMapping {
+    table: string;                          // Target table name
+    column: string;                         // Target column name
+    type?: 'scalar' | 'array';             // How to handle the value (default: scalar)
+    siblings?: Record<string, string>;      // Map other result columns to table columns
+}
+
 export interface GeneratorConfig {
     inputFile: string;
     outputDir: string;
     migrationName?: string;
     deduplicateRows?: boolean; // default: true
     handleCircularDeps?: boolean; // default: true
+    columnMappings?: Record<string, ColumnMapping>;  // Map result column names to table columns
 }
 
 export interface MigrationConfig {

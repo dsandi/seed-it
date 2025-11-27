@@ -102,7 +102,8 @@ npx seed-it generate
 This will:
 1. Read captured data from `./seed-it-output/captured-data.json`
 2. Connect to your remote database(s) to analyze schema
-3. Generate SQL files in `./seed-it-output/`
+3. **Automatically infer column mappings** from query structure
+4. Generate SQL files in `./seed-it-output/`
 
 **Output Structure:**
 ```
@@ -141,6 +142,35 @@ psql -h localhost -U localuser -d local_db1 -f seed-it-output/db1/seeders/*.sql
   - Your local PostgreSQL instance
   - Where you manually apply the generated SQL files
 
+## Automatic Column Mapping
+
+seed-it automatically handles calculated fields (e.g., `array_agg`, `CASE` statements) by parsing your SQL queries.
+
+### Example: Array Aggregation
+
+Your query:
+```sql
+SELECT kd.record_id, array_agg(kcd.ref_id) AS categories
+FROM main_table kd
+LEFT JOIN related_table kcd ON kcd.main_table_id_fk = kd.id
+GROUP BY kd.record_id
+```
+
+seed-it automatically:
+1. Detects `categories` is `array_agg(kcd.ref_id)`
+2. Parses the JOIN to find `related_table` table
+3. Extracts the foreign key relationship from `ON kcd.main_table_id_fk = kd.id`
+4. Generates correct INSERTs:
+
+```sql
+INSERT INTO related_table (ref_id, main_table_id_fk) VALUES (101, 'test-rec-2741208312314');
+INSERT INTO related_table (ref_id, main_table_id_fk) VALUES (101, 'test-rec-all');
+INSERT INTO related_table (ref_id, main_table_id_fk) VALUES (102, 'test-rec-all');
+-- etc.
+```
+
+**No configuration required!**
+
 ## API Reference
 
 ### `startCapturePool(pool, databaseName, config?)` / `startCaptureClient(client, databaseName, config?)`
@@ -167,12 +197,13 @@ Generates migrations and seeders. Reads from `seed-it.config.js`.
 - `-c, --config <path>` - Path to configuration file
 - `-i, --input <file>` - Input file (default: `./seed-it-output/captured-data.json`)
 - `-o, --output <dir>` - Output directory (default: `./seed-it-output`)
+- `--debug` - Enable debug logging
 
 ## Troubleshooting
 
 ### Debug Mode
 
-If you encounter issues (e.g., empty seeders, missing data), you can enable debug logging:
+If you encounter issues (e.g., empty seeders, missing data), enable debug logging:
 
 ```bash
 npx seed-it generate --debug
@@ -183,13 +214,14 @@ This creates a `seed-it-debug.json` file in your output directory containing det
 - Which queries were ignored and why
 - Table name extraction results
 - Row counts
+- Skipped columns (calculated fields without mappings)
 
 ## Performance & Large Datasets
 
 seed-it is optimized for large test suites (10,000+ tests):
-- ✅ Streaming writes for large datasets
-- ✅ Chunked processing to avoid OOM
-- ✅ Progress logging
+- Streaming writes for large datasets
+- Chunked processing to avoid OOM
+- Progress logging
 
 ## License
 

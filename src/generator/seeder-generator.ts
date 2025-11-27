@@ -3,6 +3,7 @@ import * as path from 'path';
 import { CapturedQuery, TableSchema } from '../types';
 import { DependencyResolver } from './dependency-resolver';
 import { Deduplicator } from './deduplicator';
+import { AutoColumnMapper } from './auto-column-mapper';
 
 /**
  * Seeder generator that creates SQL INSERT statements from captured data
@@ -11,11 +12,18 @@ export class SeederGenerator {
     private dependencyResolver = new DependencyResolver();
     private deduplicator = new Deduplicator();
     private debugLogger?: any;
+    private autoMapper = new AutoColumnMapper();
 
     /**
      * Extract INSERT data from captured queries
      */
-    extractInserts(queries: CapturedQuery[], oidMap?: Map<number, string>, debugLogger?: any): Map<string, Record<string, any>[]> {
+    extractInserts(
+        queries: CapturedQuery[],
+        oidMap?: Map<number, string>,
+        schemas?: TableSchema[],
+        columnMappings?: Record<string, any>,
+        debugLogger?: any
+    ): Map<string, Record<string, any>[]> {
         this.debugLogger = debugLogger;
         const rowsByTable = new Map<string, Record<string, any>[]>();
         let ignoredCount = 0;
@@ -25,7 +33,39 @@ export class SeederGenerator {
 
             // Handle both INSERT (legacy/write capture) and SELECT (read capture)
             if (normalized.startsWith('INSERT') || normalized.startsWith('SELECT')) {
-                // Try to extract data using OID mapping first (most accurate for JOINs)
+                // Try automatic column mapping inference first
+                let effectiveMappings = columnMappings || {};
+
+                if (oidMap && schemas && Object.keys(effectiveMappings).length === 0) {
+                    const inferredMappings = this.autoMapper.inferMappings(query, schemas, oidMap);
+
+                    if (Object.keys(inferredMappings).length > 0) {
+                        if (this.debugLogger) {
+                            this.debugLogger.log('inferred_mappings', {
+                                query: query.query.substring(0, 100) + '...',
+                                mappings: inferredMappings
+                            });
+                        }
+                        effectiveMappings = { ...inferredMappings, ...effectiveMappings };
+                    }
+                }
+
+                // Try column mappings (manual or inferred)
+                if (effectiveMappings && Object.keys(effectiveMappings).length > 0) {
+                    const mapped = this.processColumnMappings(query, effectiveMappings);
+
+                    if (mapped.size > 0) {
+                        for (const [table, rows] of mapped.entries()) {
+                            if (!rowsByTable.has(table)) {
+                                rowsByTable.set(table, []);
+                            }
+                            rowsByTable.get(table)!.push(...rows);
+                        }
+                        // Continue to also process OID mapping (for non-mapped columns)
+                    }
+                }
+
+                // Try to extract data using OID mapping (most accurate for JOINs)
                 if (oidMap && query.result && query.result.fields) {
                     const extracted = this.extractRowsWithOids(query, oidMap);
 
@@ -143,6 +183,76 @@ export class SeederGenerator {
     }
 
     /**
+     * Process column mappings for calculated fields
+     */
+    private processColumnMappings(
+        query: CapturedQuery,
+        columnMappings: Record<string, any>
+    ): Map<string, Record<string, any>[]> {
+        const rowsByTable = new Map<string, Record<string, any>[]>();
+
+        if (!query.result || !query.result.rows || query.result.rows.length === 0) {
+            return rowsByTable;
+        }
+
+        for (const row of query.result.rows) {
+            // Check each configured mapping
+            for (const [resultColumn, mapping] of Object.entries(columnMappings)) {
+                const value = row[resultColumn];
+
+                if (value === undefined || value === null) {
+                    continue;
+                }
+
+                const table = mapping.table;
+                const column = mapping.column;
+                const type = mapping.type || 'scalar';
+                const siblings = mapping.siblings || {};
+
+                if (!rowsByTable.has(table)) {
+                    rowsByTable.set(table, []);
+                }
+
+                if (type === 'array' && Array.isArray(value)) {
+                    // Unroll array: create one row per array element
+                    for (const arrayValue of value) {
+                        const newRow: Record<string, any> = {
+                            [column]: arrayValue
+                        };
+
+                        // Add sibling columns
+                        for (const [siblingResultCol, siblingTableCol] of Object.entries(siblings)) {
+                            const siblingValue = row[siblingResultCol];
+                            if (siblingValue !== undefined) {
+                                newRow[String(siblingTableCol)] = siblingValue;
+                            }
+                        }
+
+                        rowsByTable.get(table)!.push(newRow);
+                    }
+                } else {
+                    // Scalar: create one row
+                    const newRow: Record<string, any> = {
+                        [column]: value
+                    };
+
+                    // Add sibling columns
+                    for (const [siblingResultCol, siblingTableCol] of Object.entries(siblings)) {
+                        const siblingValue = row[siblingResultCol];
+                        if (siblingValue !== undefined) {
+                            newRow[String(siblingTableCol)] = siblingValue;
+                        }
+                    }
+
+                    rowsByTable.get(table)!.push(newRow);
+                }
+            }
+        }
+
+        return rowsByTable;
+    }
+
+    /**
      * Extract table name from query
      */
     private extractTableName(query: string): string | null {
@@ -249,12 +359,13 @@ export class SeederGenerator {
         outputDir: string,
         seederName: string = 'initial_data',
         oidMap?: Map<number, string>,
+        columnMappings?: Record<string, any>,
         debugLogger?: any
     ): Promise<string> {
         // ...
 
         // Extract INSERT data
-        const rowsByTable = this.extractInserts(queries, oidMap, debugLogger);
+        const rowsByTable = this.extractInserts(queries, oidMap, schemas, columnMappings, debugLogger);
 
         if (debugLogger) {
             debugLogger.log('extracted_rows', {
@@ -339,9 +450,10 @@ export class SeederGenerator {
     async generateSeedersByTable(
         queries: CapturedQuery[],
         schemas: TableSchema[],
-        outputDir: string
+        outputDir: string,
+        oidMap?: Map<number, string>
     ): Promise<string[]> {
-        const rowsByTable = this.extractInserts(queries);
+        const rowsByTable = this.extractInserts(queries, oidMap, schemas);
         const deduplicated = this.deduplicator.deduplicateAll(rowsByTable, schemas);
         const { order } = this.dependencyResolver.resolveInsertionOrder(schemas);
 

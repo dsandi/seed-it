@@ -110,6 +110,9 @@ export async function generateCommand(options: any) {
             console.log('');
         }
 
+        // Initialize debug logger
+        const debugLogger = new DebugLogger(outputDir, options.debug);
+
         // Process each database
         for (let i = 0; i < dbConfigs.length; i++) {
             const dbConfig = dbConfigs[i];
@@ -180,7 +183,10 @@ export async function generateCommand(options: any) {
                 dbQueries, // Use filtered queries for this database
                 schemas,
                 dbOutputDir,
-                dbSeederName
+                dbSeederName,
+                oidMap,
+                config.columnMappings, // Pass column mappings from config
+                debugLogger
             );
 
             console.log(chalk.green(`✓ Generated seeder:`));
@@ -188,6 +194,7 @@ export async function generateCommand(options: any) {
             console.log('');
         }
 
+        await debugLogger.save();
         console.log(chalk.green.bold('\n✨ Generation complete!'));
         console.log('');
         console.log(chalk.gray('Next steps:'));
