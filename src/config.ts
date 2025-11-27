@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import chalk from 'chalk';
 import { CaptureConfig, GeneratorConfig } from './types';
 
 /**
@@ -22,15 +23,30 @@ export class Config {
             const fullPath = path.resolve(process.cwd(), p);
 
             if (fs.existsSync(fullPath)) {
+                console.log(chalk.gray(`[seed-it] Loading config from ${fullPath}`));
+                let config;
+
                 if (p.endsWith('.json')) {
                     const content = await fs.promises.readFile(fullPath, 'utf-8');
-                    return JSON.parse(content);
+                    config = JSON.parse(content);
                 } else {
-                    return require(fullPath);
+                    try {
+                        config = require(fullPath);
+                    } catch (e: any) {
+                        console.error(chalk.red(`Error loading config file: ${e.message}`));
+                        throw e;
+                    }
                 }
+
+                // Handle ESM default export
+                if (config && config.default) {
+                    return { ...config, ...config.default };
+                }
+                return config;
             }
         }
 
+        console.log(chalk.yellow('[seed-it] No configuration file found in current directory.'));
         return null;
     }
 

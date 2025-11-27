@@ -49,6 +49,13 @@ export async function generateCommand(options: any) {
         // Get database connection configs
         let dbConfigs: any[] = [];
 
+        // Check for common typo: database (singular) array instead of databases (plural)
+        if (userConfig?.database && Array.isArray(userConfig.database) && !userConfig.databases) {
+            console.warn(chalk.yellow('⚠ Warning: Found "database" array in config. Did you mean "databases"?'));
+            console.warn(chalk.yellow('  Automatically using "database" array as "databases".'));
+            userConfig.databases = userConfig.database;
+        }
+
         // Check if databases array is provided in config
         if (userConfig?.databases && Array.isArray(userConfig.databases)) {
             dbConfigs = userConfig.databases.map((db: any) => ({
