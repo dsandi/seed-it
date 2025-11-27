@@ -20,7 +20,8 @@ export class SeederGenerator {
         for (const query of queries) {
             const normalized = query.query.trim().toUpperCase();
 
-            if (normalized.startsWith('INSERT')) {
+            // Handle both INSERT (legacy/write capture) and SELECT (read capture)
+            if (normalized.startsWith('INSERT') || normalized.startsWith('SELECT')) {
                 const tableName = this.extractTableName(query.query);
                 const rows = this.extractRowData(query);
 
@@ -37,12 +38,24 @@ export class SeederGenerator {
     }
 
     /**
-     * Extract table name from INSERT query
+     * Extract table name from query
      */
     private extractTableName(query: string): string | null {
         // Match: INSERT INTO table_name ...
-        const match = query.match(/INSERT\s+INTO\s+([^\s(]+)/i);
-        return match ? match[1].replace(/["`]/g, '') : null;
+        const insertMatch = query.match(/INSERT\s+INTO\s+([^\s(]+)/i);
+        if (insertMatch) {
+            return insertMatch[1].replace(/["`]/g, '');
+        }
+
+        // Match: SELECT ... FROM table_name ...
+        // Note: This is a simple regex and might not handle complex queries (joins, subqueries) perfectly
+        // but covers the common case for seed generation
+        const selectMatch = query.match(/\s+FROM\s+([^\s;()]+)/i);
+        if (selectMatch) {
+            return selectMatch[1].replace(/["`]/g, '');
+        }
+
+        return null;
     }
 
     /**
