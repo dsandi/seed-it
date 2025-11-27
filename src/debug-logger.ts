@@ -25,6 +25,7 @@ export class DebugLogger {
         if (!this.enabled || this.logData.length === 0) return;
 
         try {
+            await fs.promises.mkdir(path.dirname(this.outputPath), { recursive: true });
             await fs.promises.writeFile(
                 this.outputPath,
                 JSON.stringify(this.logData, null, 2)

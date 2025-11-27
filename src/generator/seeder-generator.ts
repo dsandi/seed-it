@@ -10,11 +10,13 @@ import { Deduplicator } from './deduplicator';
 export class SeederGenerator {
     private dependencyResolver = new DependencyResolver();
     private deduplicator = new Deduplicator();
+    private debugLogger?: any;
 
     /**
      * Extract INSERT data from captured queries
      */
     extractInserts(queries: CapturedQuery[], oidMap?: Map<number, string>, debugLogger?: any): Map<string, Record<string, any>[]> {
+        this.debugLogger = debugLogger;
         const rowsByTable = new Map<string, Record<string, any>[]>();
         let ignoredCount = 0;
 
@@ -79,6 +81,7 @@ export class SeederGenerator {
 
         // Map each field index to a table name
         const fieldMap: { index: number; table: string; column: string }[] = [];
+        const skippedFields: string[] = [];
 
         query.result.fields.forEach((field: any, index: number) => {
             const tableName = oidMap.get(field.tableID);
@@ -88,8 +91,19 @@ export class SeederGenerator {
                     table: tableName,
                     column: field.name
                 });
+            } else {
+                skippedFields.push(`${field.name} (TableID: ${field.tableID})`);
             }
         });
+
+        // Log skipped fields if any
+        if (this.debugLogger && skippedFields.length > 0) {
+            this.debugLogger.log('skipped_columns', {
+                query: query.query.substring(0, 100) + '...',
+                reason: 'missing_oid_mapping_or_calculated_field',
+                skipped: skippedFields
+            });
+        }
 
         if (fieldMap.length === 0) {
             return rowsByTable;
