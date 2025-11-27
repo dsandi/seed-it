@@ -39,7 +39,7 @@ export class Config {
      */
     static getDefaultCaptureConfig(): CaptureConfig {
         return {
-            outputDir: './output',
+            outputDir: './seed-it-output',
             databases: [],
             captureReads: false,
             captureTransactions: true,
@@ -52,8 +52,8 @@ export class Config {
      */
     static getDefaultGeneratorConfig(): GeneratorConfig {
         return {
-            inputFile: './output/captured-data.json',
-            outputDir: './output',
+            inputFile: './seed-it-output/captured-data.json',
+            outputDir: './seed-it-output',
             deduplicateRows: true,
             handleCircularDeps: true,
         };
