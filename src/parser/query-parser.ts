@@ -77,6 +77,27 @@ export class QueryParser {
             const expression = aliasMatch ? aliasMatch[1].trim() : trimmed;
             const alias = aliasMatch ? aliasMatch[2] : undefined;
 
+            // Check for CASE statement containing aggregate
+            const caseAggMatch = expression.match(/CASE.+?(array_agg|count|sum|avg|min|max)\s*\((.+?)\)/is);
+
+            if (caseAggMatch) {
+                const func = caseAggMatch[1].toLowerCase();
+                const arg = caseAggMatch[2].trim();
+
+                // Extract table alias and column
+                const colMatch = arg.match(/([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)$/i);
+
+                columns.push({
+                    expression,
+                    alias,
+                    isAggregate: true,
+                    aggregateFunction: func,
+                    aggregateColumn: colMatch ? colMatch[2] : arg,
+                    tableAlias: colMatch ? colMatch[1] : undefined
+                });
+                continue;
+            }
+
             // Check for aggregate function
             const aggMatch = expression.match(/^(array_agg|count|sum|avg|min|max)\s*\((.+)\)/i);
 

@@ -39,13 +39,15 @@ export class SeederGenerator {
                 if (oidMap && schemas && Object.keys(effectiveMappings).length === 0) {
                     const inferredMappings = this.autoMapper.inferMappings(query, schemas, oidMap);
 
+                    if (this.debugLogger) {
+                        this.debugLogger.log('inference_attempt', {
+                            query: query.query,
+                            inferredCount: Object.keys(inferredMappings).length,
+                            mappings: inferredMappings
+                        });
+                    }
+
                     if (Object.keys(inferredMappings).length > 0) {
-                        if (this.debugLogger) {
-                            this.debugLogger.log('inferred_mappings', {
-                                query: query.query.substring(0, 100) + '...',
-                                mappings: inferredMappings
-                            });
-                        }
                         effectiveMappings = { ...inferredMappings, ...effectiveMappings };
                     }
                 }
@@ -123,7 +125,7 @@ export class SeederGenerator {
             return rowsByTable;
         }
 
-        // Map each field index to a table name
+        // Map each field to a table name (using OID when available)
         const fieldMap: { index: number; table: string; column: string }[] = [];
         const skippedFields: string[] = [];
 
@@ -143,10 +145,34 @@ export class SeederGenerator {
         // Log skipped fields if any
         if (this.debugLogger && skippedFields.length > 0) {
             this.debugLogger.log('skipped_columns', {
-                query: query.query.substring(0, 100) + '...',
+                query: query.query,
                 reason: 'missing_oid_mapping_or_calculated_field',
                 skipped: skippedFields
             });
+        }
+
+        // If we have no OID mappings, try to infer the main table from the query
+        // and include ALL columns for that table
+        if (fieldMap.length === 0 && schemas) {
+            const tableName = this.extractTableName(query.query);
+            if (tableName) {
+                // Add all fields to this table
+                query.result.fields.forEach((field: any, index: number) => {
+                    fieldMap.push({
+                        index,
+                        table: tableName,
+                        column: field.name
+                    });
+                });
+
+                if (this.debugLogger) {
+                    this.debugLogger.log('fallback_table_inference', {
+                        query: query.query,
+                        inferredTable: tableName,
+                        columnCount: fieldMap.length
+                    });
+                }
+            }
         }
 
         if (fieldMap.length === 0) {
