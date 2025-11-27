@@ -1,24 +1,48 @@
 /**
  * Example configuration file for seed-it
+ * 
+ * IMPORTANT: These are your REMOTE/DEV database connections
+ * (where you run tests and capture data)
+ * 
+ * The generated SQL files will be applied to your LOCAL database manually
  */
 module.exports = {
-    // Database connection details for schema analysis
-    database: {
-        host: 'localhost',
-        port: 5432,
-        name: 'your_database_name',
-        user: 'your_username',
-        password: 'your_password'
-    },
+    // Remote/Dev databases (for schema introspection during generation)
+    databases: [
+        {
+            name: 'db1',
+            host: 'dev-server.example.com',  // Your remote dev/test server
+            port: 5432,
+            user: 'your_username',
+            password: 'your_password'
+        },
+        {
+            name: 'db2',
+            host: 'dev-server.example.com',  // Your remote dev/test server
+            port: 5432,
+            user: 'your_username',
+            password: 'your_password'
+        }
+    ],
 
     // Generator configuration
     generate: {
-        inputFile: './output/captured-data.json',
-        outputDir: './output',
+        inputFile: './seed-it-output/captured-data.json',
+        outputDir: './seed-it-output',
         migrationName: 'initial_schema',
         seederName: 'initial_data',
-        splitSeeders: false, // Set to true to generate one seeder file per table
+        splitSeeders: false,
         deduplicateRows: true,
         handleCircularDeps: true
     }
 };
+
+/*
+ * WORKFLOW:
+ * 
+ * 1. Run tests against REMOTE databases (captures data)
+ * 2. Run `npx seed-it generate` (connects to REMOTE to introspect schema)
+ * 3. Apply generated SQL to LOCAL database:
+ *    psql -U localuser -d localdb -f seed-it-output/db1/migrations/*.up.sql
+ *    psql -U localuser -d localdb -f seed-it-output/db1/seeders/*.sql
+ */

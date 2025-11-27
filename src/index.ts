@@ -34,7 +34,7 @@ export function startCapturePool(
     const { interceptors } = require('./interceptor-registry');
 
     const fullConfig: CaptureConfig = {
-        outputDir: config.outputDir || './output',
+        outputDir: config.outputDir || './seed-it-output',
         databases: config.databases || [databaseName],
         captureReads: config.captureReads ?? true,
         captureWrites: config.captureWrites ?? false,
@@ -64,7 +64,7 @@ export function startCaptureClient(
     const { interceptors } = require('./interceptor-registry');
 
     const fullConfig: CaptureConfig = {
-        outputDir: config.outputDir || './output',
+        outputDir: config.outputDir || './seed-it-output',
         databases: config.databases || [databaseName],
         captureReads: config.captureReads ?? true,
         captureWrites: config.captureWrites ?? false,

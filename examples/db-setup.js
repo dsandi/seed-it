@@ -1,13 +1,17 @@
 /**
  * Example: Database setup with Pools and Clients
  * 
- * Shows both Pool and Client usage patterns
+ * Shows both pool.query() and pool.connect() patterns
  */
 
 const { Pool, Client } = require('pg');
 const { startCapturePool, startCaptureClient } = require('seed-it');
 
-// Option 1: Using Pools (recommended for connection pooling)
+// ============================================
+// OPTION 1: Direct pool.query() pattern
+// ============================================
+// Use this if you call pool.query() directly
+
 const pool1 = new Pool({
     host: 'localhost',
     database: 'test_db_1',
@@ -15,6 +19,16 @@ const pool1 = new Pool({
     password: 'password',
     port: 5432
 });
+
+startCapturePool(pool1, 'test_db_1', {
+    outputDir: './seed-it-output',
+    verbose: false
+});
+
+// ============================================
+// OPTION 2: pool.connect() pattern (RECOMMENDED)
+// ============================================
+// Use this if you use pool.connect() to get clients
 
 const pool2 = new Pool({
     host: 'localhost',
@@ -24,18 +38,25 @@ const pool2 = new Pool({
     port: 5432
 });
 
-// Wrap pools - automatically registered globally
-startCapturePool(pool1, 'test_db_1', {
-    outputDir: './output',
-    verbose: false
-});
+// Wrap pool.connect() to intercept all clients
+const originalConnect = pool2.connect.bind(pool2);
 
-startCapturePool(pool2, 'test_db_2', {
-    outputDir: './output',
-    verbose: false
-});
+pool2.connect = async function (...args) {
+    const client = await originalConnect(...args);
 
-// Option 2: Using Clients (for single connections)
+    // Wrap each client from the pool
+    startCaptureClient(client, 'test_db_2', {
+        outputDir: './seed-it-output',
+        verbose: false
+    });
+
+    return client;
+};
+
+// ============================================
+// OPTION 3: Standalone Client
+// ============================================
+
 const client1 = new Client({
     host: 'localhost',
     database: 'test_db_3',
@@ -44,18 +65,16 @@ const client1 = new Client({
     port: 5432
 });
 
-// Connect the client
-async function setupClients() {
+async function setupClient() {
     await client1.connect();
 
-    // Wrap client - automatically registered globally
     startCaptureClient(client1, 'test_db_3', {
-        outputDir: './output',
+        outputDir: './seed-it-output',
         verbose: false
     });
 }
 
-setupClients();
+setupClient();
 
 // Export for use in tests
 module.exports = { pool1, pool2, client1 };

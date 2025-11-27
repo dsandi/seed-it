@@ -126,30 +126,66 @@ export class PoolInterceptor {
     }
 
     /**
-     * Save captured queries to file
-     */
+   * Save captured queries to file
+   */
     async save(): Promise<void> {
         const outputPath = path.join(this.config.outputDir, 'captured-data.json');
 
-        // Ensure output directory exists
         await fs.promises.mkdir(this.config.outputDir, { recursive: true });
 
-        // Write to file
-        await fs.promises.writeFile(
-            outputPath,
-            JSON.stringify(
-                {
-                    capturedAt: new Date().toISOString(),
-                    queryCount: this.capturedQueries.length,
-                    databases: this.config.databases,
-                    queries: this.capturedQueries,
-                },
-                null,
-                2
-            )
-        );
+        // For large datasets, write in chunks to avoid OOM
+        const CHUNK_SIZE = 1000;
+        const totalQueries = this.capturedQueries.length;
 
-        console.log(`[seed-it] Saved ${this.capturedQueries.length} queries to ${outputPath}`);
+        if (totalQueries > CHUNK_SIZE) {
+            console.log(`[seed-it] Writing ${totalQueries} queries in chunks...`);
+
+            // Write header
+            await fs.promises.writeFile(outputPath, '{\n');
+            await fs.promises.appendFile(outputPath, `  "capturedAt": "${new Date().toISOString()}",\n`);
+            await fs.promises.appendFile(outputPath, `  "queryCount": ${totalQueries},\n`);
+            await fs.promises.appendFile(outputPath, `  "databases": ${JSON.stringify(this.config.databases)},\n`);
+            await fs.promises.appendFile(outputPath, '  "queries": [\n');
+
+            // Write queries in chunks
+            for (let i = 0; i < totalQueries; i += CHUNK_SIZE) {
+                const chunk = this.capturedQueries.slice(i, i + CHUNK_SIZE);
+                const isLastChunk = i + CHUNK_SIZE >= totalQueries;
+
+                const chunkJson = chunk.map((q, idx) => {
+                    const isLastInChunk = idx === chunk.length - 1;
+                    const comma = (isLastChunk && isLastInChunk) ? '' : ',';
+                    return '    ' + JSON.stringify(q) + comma;
+                }).join('\n');
+
+                await fs.promises.appendFile(outputPath, chunkJson + '\n');
+
+                if ((i + CHUNK_SIZE) % 5000 === 0) {
+                    console.log(`[seed-it] Wrote ${Math.min(i + CHUNK_SIZE, totalQueries)}/${totalQueries} queries...`);
+                }
+            }
+
+            // Write footer
+            await fs.promises.appendFile(outputPath, '  ]\n');
+            await fs.promises.appendFile(outputPath, '}\n');
+        } else {
+            // Small dataset, write normally
+            await fs.promises.writeFile(
+                outputPath,
+                JSON.stringify(
+                    {
+                        capturedAt: new Date().toISOString(),
+                        queryCount: totalQueries,
+                        databases: this.config.databases,
+                        queries: this.capturedQueries,
+                    },
+                    null,
+                    2
+                )
+            );
+        }
+
+        console.log(`[seed-it] Saved ${totalQueries} queries to ${outputPath}`);
     }
 
     /**

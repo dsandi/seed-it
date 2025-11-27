@@ -1,6 +1,6 @@
 {
   "name": "seed-it",
-  "version": "1.0.0",
+  "version": "0.0.7",
   "description": "Capture database traffic from integration tests and generate migrations and seeders",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

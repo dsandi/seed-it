@@ -47,6 +47,20 @@ export interface IndexInfo {
     isPrimary: boolean;
 }
 
+export interface DatabaseConfig {
+    host: string;
+    port: number;
+    name: string;
+    user: string;
+    password?: string;
+}
+
+export interface Config {
+    databases?: DatabaseConfig[]; // Array of database configs
+    database?: DatabaseConfig;    // Legacy single database config
+    generate?: GeneratorConfig;
+}
+
 export interface SeederRow {
     table: string;
     data: Record<string, any>;

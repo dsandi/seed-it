@@ -28,7 +28,7 @@ after(async function () {
     console.log('Saving captured data...');
 
     // Save all captured queries from all interceptors
-    await interceptors.saveAll('./output');
+    await interceptors.saveAll();
 
     console.log('Captured data saved to ./output/captured-data.json');
 });

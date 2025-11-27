@@ -39,7 +39,7 @@ class InterceptorRegistry {
     /**
      * Save all captured queries to a single file
      */
-    async saveAll(outputDir: string = './output'): Promise<void> {
+    async saveAll(): Promise<void> {
         const allQueries = this.getAllQueries();
 
         if (this.interceptors.size === 0) {
@@ -47,7 +47,7 @@ class InterceptorRegistry {
             return;
         }
 
-        // Use first interceptor to save
+        // Use first interceptor to save (it has the outputDir config)
         const firstInterceptor = this.getAll()[0];
         firstInterceptor.clear();
 
