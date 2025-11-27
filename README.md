@@ -171,20 +171,34 @@ Create `seed-it.config.js` in your project root:
 
 ```javascript
 module.exports = {
-  database: {
-    host: 'localhost',
-    port: 5432,
-    name: 'your_db',
-    user: 'your_user',
-    password: 'your_password'
-  },
-  generate: {
-    inputFile: './output/captured-data.json',
-    outputDir: './output',
-    migrationName: 'initial_schema',
-    seederName: 'initial_data',
-    splitSeeders: false, // Set to true to generate one file per table
-  }
+    // Remote/Dev databases (for schema introspection during generation)
+    databases: [
+        {
+            name: 'db1',
+            host: 'dev-server.example.com',  // Your remote dev/test server
+            port: 5432,
+            user: 'your_username',
+            password: 'your_password'
+        },
+        {
+            name: 'db2',
+            host: 'dev-server.example.com',  // Your remote dev/test server
+            port: 5432,
+            user: 'your_username',
+            password: 'your_password'
+        }
+    ],
+
+    // Generator configuration
+    generate: {
+        inputFile: './seed-it-output/captured-data.json',
+        outputDir: './seed-it-output',
+        migrationName: 'initial_schema',
+        seederName: 'initial_data',
+        splitSeeders: false,
+        deduplicateRows: true,
+        handleCircularDeps: true
+    }
 };
 ```
 
