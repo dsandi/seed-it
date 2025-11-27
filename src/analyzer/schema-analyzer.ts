@@ -171,7 +171,7 @@ export class SchemaAnalyzer {
     const result = await this.pool.query(`
       SELECT
         i.relname AS index_name,
-        array_agg(a.attname ORDER BY a.attnum) AS columns,
+        array_agg(a.attname::text ORDER BY a.attnum) AS columns,
         ix.indisunique AS is_unique,
         ix.indisprimary AS is_primary
       FROM pg_class t

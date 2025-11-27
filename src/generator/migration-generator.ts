@@ -89,7 +89,8 @@ export class MigrationGenerator {
             .filter(idx => !idx.isPrimary) // Skip primary key indexes
             .map(idx => {
                 const unique = idx.isUnique ? 'UNIQUE ' : '';
-                return `CREATE ${unique}INDEX ${idx.indexName} ON ${schema.tableName} (${idx.columns.join(', ')});`;
+                const columns = Array.isArray(idx.columns) ? idx.columns.join(', ') : String(idx.columns);
+                return `CREATE ${unique}INDEX ${idx.indexName} ON ${schema.tableName} (${columns});`;
             });
     }
 
