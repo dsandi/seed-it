@@ -14,14 +14,16 @@ module.exports = {
             host: 'dev-server.example.com',  // Your remote dev/test server
             port: 5432,
             user: 'your_username',
-            password: 'your_password'
+            password: 'your_password',
+            ssl: { rejectUnauthorized: false } // Required for many remote databases (RDS, Neon, etc.)
         },
         {
             name: 'db2',
             host: 'dev-server.example.com',  // Your remote dev/test server
             port: 5432,
             user: 'your_username',
-            password: 'your_password'
+            password: 'your_password',
+            ssl: { rejectUnauthorized: false }
         }
     ],
 

@@ -63,7 +63,8 @@ export async function generateCommand(options: any) {
                 port: db.port || 5432,
                 database: db.name,
                 user: db.user,
-                password: db.password
+                password: db.password,
+                ssl: db.ssl
             }));
         }
 
@@ -75,6 +76,7 @@ export async function generateCommand(options: any) {
                 database: options.dbName || userConfig?.database?.name,
                 user: options.dbUser || userConfig?.database?.user,
                 password: options.dbPassword || userConfig?.database?.password,
+                ssl: userConfig?.database?.ssl,
             };
 
             if (singleDb.database && singleDb.user) {
