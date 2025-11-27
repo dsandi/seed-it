@@ -67,7 +67,7 @@ export class SeederGenerator {
 
                 // Try to extract data using OID mapping (most accurate for JOINs)
                 if (oidMap && query.result && query.result.fields) {
-                    const extracted = this.extractRowsWithOids(query, oidMap);
+                    const extracted = this.extractRowsWithOids(query, oidMap, schemas);
 
                     if (extracted.size > 0) {
                         for (const [table, rows] of extracted.entries()) {
@@ -112,7 +112,11 @@ export class SeederGenerator {
     /**
      * Extract rows using OID metadata to map columns to tables
      */
-    private extractRowsWithOids(query: CapturedQuery, oidMap: Map<number, string>): Map<string, Record<string, any>[]> {
+    private extractRowsWithOids(
+        query: CapturedQuery,
+        oidMap: Map<number, string>,
+        schemas?: TableSchema[]
+    ): Map<string, Record<string, any>[]> {
         const rowsByTable = new Map<string, Record<string, any>[]>();
 
         if (!query.result || !query.result.rows || query.result.rows.length === 0 || !query.result.fields) {
@@ -165,6 +169,34 @@ export class SeederGenerator {
                 const val = row[field.column];
                 if (val !== undefined) {
                     partialRows.get(field.table)![field.column] = val;
+                }
+            }
+
+            // Auto-fill foreign keys from related tables in the result set
+            if (schemas) {
+                for (const [table, data] of partialRows.entries()) {
+                    const schema = schemas.find(s => s.tableName === table);
+                    if (!schema) continue;
+
+                    // Find foreign keys that are missing from the result
+                    for (const fk of schema.foreignKeys) {
+                        if (data[fk.columnName] !== undefined) continue;
+
+                        // Try to find the value from the referenced table's row
+                        const referencedRow = partialRows.get(fk.referencedTable);
+                        if (referencedRow && referencedRow[fk.referencedColumn] !== undefined) {
+                            data[fk.columnName] = referencedRow[fk.referencedColumn];
+
+                            if (this.debugLogger) {
+                                this.debugLogger.log('auto_filled_fk', {
+                                    table,
+                                    column: fk.columnName,
+                                    value: referencedRow[fk.referencedColumn],
+                                    from: `${fk.referencedTable}.${fk.referencedColumn}`
+                                });
+                            }
+                        }
+                    }
                 }
             }
 
