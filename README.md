@@ -168,6 +168,22 @@ Generates migrations and seeders. Reads from `seed-it.config.js`.
 - `-i, --input <file>` - Input file (default: `./seed-it-output/captured-data.json`)
 - `-o, --output <dir>` - Output directory (default: `./seed-it-output`)
 
+## Troubleshooting
+
+### Debug Mode
+
+If you encounter issues (e.g., empty seeders, missing data), you can enable debug logging:
+
+```bash
+npx seed-it generate --debug
+```
+
+This creates a `seed-it-debug.json` file in your output directory containing detailed information about:
+- Which queries were processed
+- Which queries were ignored and why
+- Table name extraction results
+- Row counts
+
 ## Performance & Large Datasets
 
 seed-it is optimized for large test suites (10,000+ tests):

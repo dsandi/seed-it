@@ -134,14 +134,15 @@ export async function generateCommand(options: any) {
             console.log(chalk.gray('Analyzing database schema...'));
             const analyzer = new SchemaAnalyzer(dbConfig);
             const schemas = await analyzer.getAllSchemas();
+            const views = await analyzer.getViews().then(names =>
+                Promise.all(names.map(async name => ({
+                    name,
+                    definition: await analyzer.getViewDefinition(name)
+                })))
+            );
 
-            // Get views
-            const viewNames = await analyzer.getViews();
-            const views = [];
-            for (const viewName of viewNames) {
-                const definition = await analyzer.getViewDefinition(viewName);
-                views.push({ name: viewName, definition });
-            }
+            // Get OID map for handling JOINs
+            const oidMap = await analyzer.getTableOids();
 
             await analyzer.close();
 

@@ -27,6 +27,24 @@ export class SchemaAnalyzer {
   }
 
   /**
+   * Get map of table OIDs to table names
+   */
+  async getTableOids(): Promise<Map<number, string>> {
+    const result = await this.pool.query(`
+      SELECT oid, relname
+      FROM pg_class
+      WHERE relkind = 'r'
+        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+    `);
+
+    const map = new Map<number, string>();
+    result.rows.forEach(row => {
+      map.set(row.oid, row.relname);
+    });
+    return map;
+  }
+
+  /**
    * Get all views in the database
    */
   async getViews(): Promise<string[]> {

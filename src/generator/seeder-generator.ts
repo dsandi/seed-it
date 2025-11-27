@@ -14,7 +14,7 @@ export class SeederGenerator {
     /**
      * Extract INSERT data from captured queries
      */
-    extractInserts(queries: CapturedQuery[], debugLogger?: any): Map<string, Record<string, any>[]> {
+    extractInserts(queries: CapturedQuery[], oidMap?: Map<number, string>, debugLogger?: any): Map<string, Record<string, any>[]> {
         const rowsByTable = new Map<string, Record<string, any>[]>();
         let ignoredCount = 0;
 
@@ -23,6 +23,22 @@ export class SeederGenerator {
 
             // Handle both INSERT (legacy/write capture) and SELECT (read capture)
             if (normalized.startsWith('INSERT') || normalized.startsWith('SELECT')) {
+                // Try to extract data using OID mapping first (most accurate for JOINs)
+                if (oidMap && query.result && query.result.fields) {
+                    const extracted = this.extractRowsWithOids(query, oidMap);
+
+                    if (extracted.size > 0) {
+                        for (const [table, rows] of extracted.entries()) {
+                            if (!rowsByTable.has(table)) {
+                                rowsByTable.set(table, []);
+                            }
+                            rowsByTable.get(table)!.push(...rows);
+                        }
+                        continue; // Successfully processed with OIDs
+                    }
+                }
+
+                // Fallback to regex parsing (legacy/simple queries)
                 const tableName = this.extractTableName(query.query);
                 const rows = this.extractRowData(query);
 
@@ -46,6 +62,67 @@ export class SeederGenerator {
 
         if (debugLogger && ignoredCount > 0) {
             debugLogger.log('ignored_non_data_queries', { count: ignoredCount });
+        }
+
+        return rowsByTable;
+    }
+
+    /**
+     * Extract rows using OID metadata to map columns to tables
+     */
+    private extractRowsWithOids(query: CapturedQuery, oidMap: Map<number, string>): Map<string, Record<string, any>[]> {
+        const rowsByTable = new Map<string, Record<string, any>[]>();
+
+        if (!query.result || !query.result.rows || query.result.rows.length === 0 || !query.result.fields) {
+            return rowsByTable;
+        }
+
+        // Map each field index to a table name
+        const fieldMap: { index: number; table: string; column: string }[] = [];
+
+        query.result.fields.forEach((field: any, index: number) => {
+            const tableName = oidMap.get(field.tableID);
+            if (tableName) {
+                fieldMap.push({
+                    index,
+                    table: tableName,
+                    column: field.name
+                });
+            }
+        });
+
+        if (fieldMap.length === 0) {
+            return rowsByTable;
+        }
+
+        // Process each row
+        for (const row of query.result.rows) {
+            // Create a partial row for each table involved
+            const partialRows = new Map<string, Record<string, any>>();
+
+            for (const field of fieldMap) {
+                if (!partialRows.has(field.table)) {
+                    partialRows.set(field.table, {});
+                }
+
+                // Note: pg driver returns rows as objects with column names as keys.
+                // If there are duplicate column names, the last one wins in the object.
+                // This is a limitation of the default pg output.
+                const val = row[field.column];
+                if (val !== undefined) {
+                    partialRows.get(field.table)![field.column] = val;
+                }
+            }
+
+            // Add partial rows to result
+            for (const [table, data] of partialRows.entries()) {
+                if (Object.keys(data).length > 0) {
+                    if (!rowsByTable.has(table)) {
+                        rowsByTable.set(table, []);
+                    }
+                    rowsByTable.get(table)!.push(data);
+                }
+            }
         }
 
         return rowsByTable;
@@ -157,12 +234,13 @@ export class SeederGenerator {
         schemas: TableSchema[],
         outputDir: string,
         seederName: string = 'initial_data',
+        oidMap?: Map<number, string>,
         debugLogger?: any
     ): Promise<string> {
         // ...
 
         // Extract INSERT data
-        const rowsByTable = this.extractInserts(queries, debugLogger);
+        const rowsByTable = this.extractInserts(queries, oidMap, debugLogger);
 
         if (debugLogger) {
             debugLogger.log('extracted_rows', {
