@@ -321,6 +321,25 @@ export class SeederGenerator {
                     }
                 }
 
+                // 3. Fallback: Try Best Effort with ALL available columns
+                // If we still don't have a query, and we have SOME data, try to find a row that matches what we have.
+                // This is risky if the data isn't unique, but better than failing to enrich when we have a "pretty good" identifier (like a token).
+                if (!fetchQuery) {
+                    const validColumns = schema.columns.map(c => c.columnName);
+                    const availableColumns = Object.keys(row).filter(key =>
+                        row[key] !== undefined &&
+                        row[key] !== null &&
+                        validColumns.includes(key)
+                    );
+
+                    if (availableColumns.length > 0) {
+                        const conditions = availableColumns.map((col, idx) => `${col} = $${idx + 1}`).join(' AND ');
+                        fetchQuery = `SELECT * FROM ${table} WHERE ${conditions} LIMIT 1`;
+                        fetchValues = availableColumns.map(col => row[col]);
+                        log.warn(`[seed-it] ⚠ Using heuristic lookup for ${table} using columns: ${availableColumns.join(', ')}`);
+                    }
+                }
+
                 if (fetchQuery) {
                     try {
                         // log.debug(`[seed-it] Fetching complete row for ${table} with values:`, fetchValues);

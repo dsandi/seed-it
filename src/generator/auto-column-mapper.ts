@@ -197,7 +197,7 @@ export class AutoColumnMapper {
         const parentLookups: Record<string, string> = {};
 
         // The JOIN condition tells us how tables are related
-        // e.g., kcd.kds_displays_id_fk = kd.id
+        // e.g., vr.vehicle_id = v.id
         // We need to find which column in the main SELECT maps to the FK
         const mainTableAlias = parsed.fromTable.alias || parsed.fromTable.tableName;
 

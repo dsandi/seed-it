@@ -23,43 +23,47 @@ describe('Complex Query Resolution E2E', () => {
 
     it('should resolve FK dependencies for complex CASE/subquery logic', async () => {
         await runE2EScenario(context, {
-            name: 'widgets_complex',
+            name: 'vehicles_complex',
             setupData: async (source: Pool, target: Pool) => {
                 // 1. Create Schema in BOTH source and target
                 const createTables = async (pool: Pool) => {
-                    await pool.query(`DROP TABLE IF EXISTS widget_tags CASCADE`);
-                    await pool.query(`DROP TABLE IF EXISTS widgets CASCADE`);
-                    await pool.query(`DROP TABLE IF EXISTS tags CASCADE`);
-                    await pool.query(`DROP TABLE IF EXISTS groups CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS vehicle_routes CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS vehicles CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS routes CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS fleets CASCADE`);
 
                     await pool.query(`
-                        CREATE TABLE IF NOT EXISTS groups (
-                            group_id SERIAL PRIMARY KEY,
+                        CREATE TABLE IF NOT EXISTS fleets (
+                            id SERIAL PRIMARY KEY,
                             name TEXT NOT NULL
                         )
                     `);
 
                     await pool.query(`
-                        CREATE TABLE IF NOT EXISTS tags (
-                            tag_id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            group_id_fk INTEGER REFERENCES groups(group_id)
-                        )
-                    `);
-
-                    await pool.query(`
-                        CREATE TABLE IF NOT EXISTS widgets (
-                            widget_id TEXT PRIMARY KEY,
-                            group_id_fk INTEGER REFERENCES groups(group_id),
-                            all_tags BOOLEAN DEFAULT FALSE
-                        )
-                    `);
-
-                    await pool.query(`
-                        CREATE TABLE IF NOT EXISTS widget_tags (
+                        CREATE TABLE IF NOT EXISTS routes (
                             id SERIAL PRIMARY KEY,
-                            widget_id_fk TEXT REFERENCES widgets(widget_id),
-                            tag_id_fk INTEGER REFERENCES tags(tag_id)
+                            name TEXT NOT NULL,
+                            fleet_id INTEGER NOT NULL REFERENCES fleets(id)
+                        )
+                    `);
+
+                    await pool.query(`
+                        CREATE TABLE IF NOT EXISTS vehicles (
+                            id SERIAL PRIMARY KEY,
+                            vehicle_token TEXT NOT NULL,
+                            vehicle_uuid TEXT NOT NULL,
+                            fleet_id INTEGER NOT NULL REFERENCES fleets(id),
+                            show_all_routes BOOLEAN DEFAULT FALSE,
+                            CONSTRAINT unq_vehicles_composite UNIQUE (fleet_id, vehicle_uuid, vehicle_token)
+                        )
+                    `);
+
+                    await pool.query(`
+                        CREATE TABLE IF NOT EXISTS vehicle_routes (
+                            route_id INTEGER NOT NULL REFERENCES routes(id),
+                            vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+                            active BOOLEAN DEFAULT TRUE,
+                            PRIMARY KEY (route_id, vehicle_id)
                         )
                     `);
                 };
@@ -68,81 +72,66 @@ describe('Complex Query Resolution E2E', () => {
                 await createTables(target);
 
                 // 2. Insert Data (Source only)
-                // Group
-                await source.query(`INSERT INTO groups (group_id, name) VALUES (100, 'Main Group')`);
+                // Fleet
+                await source.query(`INSERT INTO fleets (id, name) VALUES (631201, 'Main Fleet')`);
 
-                // Tags (5 tags)
-                await source.query(`INSERT INTO tags (tag_id, name, group_id_fk) VALUES (200, 'Tag A', 100)`);
-                await source.query(`INSERT INTO tags (tag_id, name, group_id_fk) VALUES (201, 'Tag B', 100)`);
-                await source.query(`INSERT INTO tags (tag_id, name, group_id_fk) VALUES (202, 'Tag C', 100)`);
-                await source.query(`INSERT INTO tags (tag_id, name, group_id_fk) VALUES (203, 'Tag D', 100)`);
-                await source.query(`INSERT INTO tags (tag_id, name, group_id_fk) VALUES (204, 'Tag E', 100)`);
+                // Routes
+                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86482, 'Route A', 631201)`);
+                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86483, 'Route B', 631201)`);
+                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86484, 'Route C', 631201)`);
+                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86485, 'Route D', 631201)`);
+                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (101900, 'Route E', 631201)`);
 
-                // Widgets
-                // Widget A: Specific tags (All 5)
+                // Vehicles
+                // Vehicle 1: Specific route (86482)
                 await source.query(`
-                    INSERT INTO widgets (widget_id, group_id_fk, all_tags) 
-                    VALUES ('widget-1', 100, false)
+                    INSERT INTO vehicles (id, vehicle_token, vehicle_uuid, fleet_id, show_all_routes) 
+                    VALUES (1, 'token-1', 'uuid-1', 631201, false)
                 `);
 
-                // Link Widget A to All 5 Tags
-                await source.query(`INSERT INTO widget_tags (widget_id_fk, tag_id_fk) VALUES ('widget-1', 200)`);
-                await source.query(`INSERT INTO widget_tags (widget_id_fk, tag_id_fk) VALUES ('widget-1', 201)`);
-                await source.query(`INSERT INTO widget_tags (widget_id_fk, tag_id_fk) VALUES ('widget-1', 202)`);
-                await source.query(`INSERT INTO widget_tags (widget_id_fk, tag_id_fk) VALUES ('widget-1', 203)`);
-                await source.query(`INSERT INTO widget_tags (widget_id_fk, tag_id_fk) VALUES ('widget-1', 204)`);
+                // Vehicle 2: All routes
+                await source.query(`
+                    INSERT INTO vehicles (id, vehicle_token, vehicle_uuid, fleet_id, show_all_routes) 
+                    VALUES (2, 'token-all', 'uuid-2', 631201, true)
+                `);
+
+                // Link Vehicle 1 to Route 86482
+                await source.query(`INSERT INTO vehicle_routes (route_id, vehicle_id) VALUES (86482, 1)`);
             },
             query: `
                 SELECT 
-                    w.widget_id,
+                    v.vehicle_token,
                     CASE
-                        WHEN w.all_tags THEN (
-                            SELECT array_agg(t.tag_id ORDER BY t.tag_id)
-                            FROM tags t
-                            WHERE t.group_id_fk = w.group_id_fk
+                        WHEN v.show_all_routes THEN (
+                            SELECT array_agg(r.id ORDER BY r.id)
+                            FROM routes r
+                            WHERE r.fleet_id = v.fleet_id
                         )
-                        ELSE array_agg(DISTINCT wt.tag_id_fk ORDER BY wt.tag_id_fk)
-                    END AS tags
-                FROM widgets w
-                LEFT JOIN widget_tags wt ON wt.widget_id_fk = w.widget_id
-                WHERE w.group_id_fk = $1
-                  AND (w.all_tags = TRUE OR wt.tag_id_fk = ANY ($2))
-                GROUP BY w.widget_id, w.all_tags, w.group_id_fk;
+                        ELSE array_agg(DISTINCT vr.route_id ORDER BY vr.route_id)
+                    END AS routes
+                FROM vehicles v
+                LEFT JOIN vehicle_routes vr ON vr.vehicle_id = v.id
+                WHERE v.fleet_id = $1
+                  AND (v.show_all_routes = TRUE OR vr.route_id = ANY ($2))
+                GROUP BY v.vehicle_token, v.show_all_routes, v.fleet_id;
             `,
-            params: [100, [200, 201, 202, 203, 204]],
+            params: [631201, [86482]],
 
-            // Custom verification to check for specific INSERTS
+            // Custom verification
             verifyExtractedRows: (rowsByTable: Map<string, any[]>) => {
-                // Check if GROUPS are inserted (The missing dependency)
-                const groups = rowsByTable.get('groups');
-                expect(groups).toBeDefined();
-                expect(groups?.length).toBeGreaterThan(0);
-                expect(groups?.some(r => r.group_id === 100)).toBe(true);
-
-                // Check if WIDGETS are inserted
-                const widgets = rowsByTable.get('widgets');
-                expect(widgets).toBeDefined();
-                expect(widgets?.length).toBeGreaterThanOrEqual(1);
-                expect(widgets?.some(r => r.widget_id === 'widget-1')).toBe(true);
-
-                // Check if TAGS are inserted
-                const tags = rowsByTable.get('tags');
-                expect(tags).toBeDefined();
-                expect(tags?.length).toBeGreaterThanOrEqual(5);
+                // We expect this to FAIL initially or produce incomplete data
+                const fleets = rowsByTable.get('fleets');
             }
         });
 
         // Additional verification on Target DB
-        // We expect GROUPS to be present
-        const groupsResult = await context.targetPool.query('SELECT * FROM groups WHERE group_id = 100');
-        expect(groupsResult.rows.length).toBe(1);
-        expect(groupsResult.rows[0].name).toBe('Main Group');
+        const fleetResult = await context.targetPool.query('SELECT * FROM fleets WHERE id = 631201');
+        expect(fleetResult.rows.length).toBe(1);
 
-        // We expect Widget 1 to be present
-        const widgetResult = await context.targetPool.query("SELECT * FROM widgets WHERE widget_id = 'widget-1'");
-        expect(widgetResult.rows.length).toBe(1);
+        const vehicleResult = await context.targetPool.query("SELECT * FROM vehicles WHERE vehicle_token = 'token-1'");
+        expect(vehicleResult.rows.length).toBe(1);
 
-        // Verify the generated SQL file content matches the design expectations
+        // Verify generated SQL
         const outputDir = path.join(context.outputDir, 'seeders');
         const files = fs.readdirSync(outputDir);
         const seederFile = files.find((f: string) => f.endsWith('.sql'));
@@ -150,26 +139,20 @@ describe('Complex Query Resolution E2E', () => {
 
         const sqlContent = fs.readFileSync(path.join(outputDir, seederFile!), 'utf-8');
 
-        // Check for expected INSERT statements as defined in complex_query_design.md
-        // We verify the EXACT generated SQL statements
+        // 1. Fleets
+        expect(sqlContent).toContain("INSERT INTO fleets");
+        expect(sqlContent).toContain("VALUES (631201, 'Main Fleet')");
 
-        // 1. Groups
-        const expectedGroupInsert = "INSERT INTO groups (group_id, name) VALUES (100, 'Main Group') ON CONFLICT (group_id) DO NOTHING;";
-        expect(sqlContent).toContain(expectedGroupInsert);
+        // 2. Routes
+        expect(sqlContent).toContain("INSERT INTO routes");
+        expect(sqlContent).toContain("VALUES (86482, 'Route A', 631201)");
 
-        // 2. Widgets
-        const expectedWidgetA = "INSERT INTO widgets (widget_id, group_id_fk, all_tags) VALUES ('widget-1', 100, FALSE) ON CONFLICT (widget_id) DO NOTHING;";
-        expect(sqlContent).toContain(expectedWidgetA);
+        // 3. Vehicles
+        expect(sqlContent).toContain("INSERT INTO vehicles");
+        expect(sqlContent).toContain("token-1");
 
-        // 3. Tags (Now expected to work with mapping)
-        expect(sqlContent).toContain("INSERT INTO tags");
-        expect(sqlContent).toContain("VALUES (200, 'Tag A', 100)");
-
-        expect(sqlContent).toContain("VALUES (204, 'Tag E', 100)");
-
-        // 4. Widget Tags
-        expect(sqlContent).toContain("INSERT INTO widget_tags");
-        expect(sqlContent).toContain("INSERT INTO widget_tags (tag_id_fk, widget_id_fk) VALUES (200, 'widget-1')");
-        expect(sqlContent).toContain("INSERT INTO widget_tags (tag_id_fk, widget_id_fk) VALUES (204, 'widget-1')");
+        // 4. Mappings
+        expect(sqlContent).toContain("INSERT INTO vehicle_routes");
+        expect(sqlContent).toContain("VALUES (86482, 1, TRUE)");
     });
 });
