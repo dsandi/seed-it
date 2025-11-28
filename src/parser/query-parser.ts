@@ -1,4 +1,5 @@
 import { CapturedQuery } from '../types';
+import { parse, SelectStatement, Expr, ExprRef, Statement } from 'pgsql-ast-parser';
 
 /**
  * Parsed SQL query structure
@@ -8,23 +9,24 @@ export interface ParsedQuery {
     fromTable: TableReference;
     joins: JoinClause[];
     groupBy: string[];
+    whereConditions: WhereCondition[];
+    paramMappings: ParamMapping[];
 }
 
 export interface SelectColumn {
-    expression: string;      // Full expression (e.g., "array_agg(kcd.category_pk_fk)")
-    alias?: string;          // AS alias (e.g., "categories")
+    expression: string;
+    alias?: string;
     isAggregate: boolean;
-    aggregateFunction?: string;  // e.g., "array_agg"
-    aggregateColumn?: string;    // e.g., "category_pk_fk"
-    tableAlias?: string;         // e.g., "kcd"
-    // Support for CASE with multiple branches
+    aggregateFunction?: string;
+    aggregateColumn?: string;
+    tableAlias?: string;
     caseAggregates?: Array<{
         branch: 'THEN' | 'ELSE';
         aggregateFunction: string;
         aggregateColumn: string;
         tableAlias?: string;
         isSubquery: boolean;
-        subqueryTable?: string;  // For THEN subqueries
+        subqueryTable?: string;
     }>;
 }
 
@@ -34,163 +36,105 @@ export interface TableReference {
 }
 
 export interface JoinClause {
-    type: string;           // LEFT, INNER, etc.
+    type: string;
     table: TableReference;
     condition: JoinCondition;
 }
 
 export interface JoinCondition {
-    leftColumn: string;     // e.g., "kcd.kds_displays_id_fk"
-    rightColumn: string;    // e.g., "kd.id"
+    leftColumn: string;
+    rightColumn: string;
     leftTable?: string;
     rightTable?: string;
 }
 
+export interface WhereCondition {
+    column: string;
+    table?: string;
+    operator: string;
+    value?: any;
+    paramIndex?: number;
+}
+
+export interface ParamMapping {
+    column: string;
+    table?: string;
+    paramIndex: number;
+    operator: string;
+}
+
 /**
- * Simple SQL query parser for extracting structure
+ * SQL query parser using pgsql-ast-parser
  */
 export class QueryParser {
-    /**
-     * Parse a SELECT query to extract structure
-     */
     parse(query: string): ParsedQuery | null {
         try {
-            const normalized = query.trim().replace(/\s+/g, ' ');
+            const ast = parse(query);
+            if (!ast || ast.length === 0) return null;
+
+            const stmt = ast[0];
+            if (stmt.type !== 'select') return null;
+
+            const selectStmt = stmt as SelectStatement;
+
+            // Type guard: SelectStatement can be SelectFromStatement or SelectFromUnion
+            if (!('columns' in selectStmt)) {
+                // It's a UNION, not supported yet
+                return null;
+            }
 
             return {
-                selectColumns: this.parseSelectColumns(normalized),
-                fromTable: this.parseFromClause(normalized),
-                joins: this.parseJoins(normalized),
-                groupBy: this.parseGroupBy(normalized)
+                selectColumns: this.extractSelectColumns(selectStmt),
+                fromTable: this.extractFromTable(selectStmt),
+                joins: this.extractJoins(selectStmt),
+                groupBy: this.extractGroupBy(selectStmt),
+                whereConditions: this.extractWhereConditions(selectStmt),
+                paramMappings: this.extractParamMappings(selectStmt)
             };
-        } catch (e) {
+        } catch (error) {
+            console.error('Failed to parse query with AST parser:', error);
+            // Return null to indicate parsing failure
             return null;
         }
     }
 
-    private parseSelectColumns(query: string): SelectColumn[] {
-        // Find SELECT keyword
-        const selectIndex = query.search(/SELECT\s+/i);
-        if (selectIndex === -1) return [];
-
-        // Find the main FROM clause (not one inside a subquery)
-        // We need to track parentheses depth to avoid matching FROM inside subqueries
-        let fromIndex = -1;
-        let depth = 0;
-        const fromRegex = /FROM\s+/gi;
-        let match;
-
-        while ((match = fromRegex.exec(query)) !== null) {
-            // Count parentheses between SELECT and this FROM
-            const textBetween = query.substring(selectIndex, match.index);
-            depth = 0;
-            for (const char of textBetween) {
-                if (char === '(') depth++;
-                else if (char === ')') depth--;
-            }
-
-            // If we're at depth 0, this is the main FROM
-            if (depth === 0) {
-                fromIndex = match.index;
-                break;
-            }
-        }
-
-        if (fromIndex === -1) return [];
-
-        // Extract columns string between SELECT and FROM
-        const columnsStr = query.substring(selectIndex + 6, fromIndex).trim(); // +6 for "SELECT"
+    private extractSelectColumns(stmt: any): SelectColumn[] {
         const columns: SelectColumn[] = [];
 
-        // Split by comma, but respect parentheses
-        const parts = this.splitByComma(columnsStr);
+        if (!stmt.columns || stmt.columns.length === 0) return columns;
 
-        for (const part of parts) {
-            const trimmed = part.trim();
-
-            // Check for alias (AS keyword or space)
-            const aliasMatch = trimmed.match(/^(.+?)\s+(?:AS\s+)?([a-z_][a-z0-9_]*)$/i);
-            const expression = aliasMatch ? aliasMatch[1].trim() : trimmed;
-            const alias = aliasMatch ? aliasMatch[2] : undefined;
-
-            // Check for CASE statement containing aggregates
-            if (expression.match(/CASE/i)) {
-                const caseAggregates: Array<{
-                    branch: 'THEN' | 'ELSE';
-                    aggregateFunction: string;
-                    aggregateColumn: string;
-                    tableAlias?: string;
-                    isSubquery: boolean;
-                    subqueryTable?: string;
-                }> = [];
-
-                // Parse THEN branch (may contain subquery with aggregate)
-                const thenMatch = expression.match(/THEN\s+\(?\s*SELECT\s+(array_agg|count|sum|avg|min|max)\s*\((?:DISTINCT\s+)?([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)/is);
-                if (thenMatch) {
-                    // Extract FROM clause from subquery to get table name
-                    // Look for FROM between THEN and ELSE (or END if no ELSE)
-                    const thenSection = expression.match(/THEN\s+\([^)]*\)/is)?.[0] || expression.match(/THEN\s+.*?(?=ELSE|END)/is)?.[0] || '';
-                    const fromMatch = thenSection.match(/FROM\s+([a-z_][a-z0-9_]*)(?:\s+([a-z_][a-z0-9_]*))?/i);
-                    caseAggregates.push({
-                        branch: 'THEN',
-                        aggregateFunction: thenMatch[1].toLowerCase(),
-                        aggregateColumn: thenMatch[3],
-                        tableAlias: thenMatch[2],
-                        isSubquery: true,
-                        subqueryTable: fromMatch ? fromMatch[1] : undefined
-                    });
-                }
-
-                // Parse ELSE branch (direct aggregate)
-                const elseMatch = expression.match(/ELSE\s+(array_agg|count|sum|avg|min|max)\s*\((?:DISTINCT\s+)?([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)/is);
-                if (elseMatch) {
-                    caseAggregates.push({
-                        branch: 'ELSE',
-                        aggregateFunction: elseMatch[1].toLowerCase(),
-                        aggregateColumn: elseMatch[3],
-                        tableAlias: elseMatch[2],
-                        isSubquery: false
-                    });
-                }
-
-                if (caseAggregates.length > 0) {
-                    // Use the first aggregate's info for backward compatibility
-                    const primary = caseAggregates[0];
-                    columns.push({
-                        expression,
-                        alias,
-                        isAggregate: true,
-                        aggregateFunction: primary.aggregateFunction,
-                        aggregateColumn: primary.aggregateColumn,
-                        tableAlias: primary.tableAlias,
-                        caseAggregates
-                    });
-                    continue;
-                }
-            }
-
-            // Check for aggregate function
-            const aggMatch = expression.match(/^(array_agg|count|sum|avg|min|max)\s*\((.+)\)/i);
-
-            if (aggMatch) {
-                const func = aggMatch[1].toLowerCase();
-                const arg = aggMatch[2].trim();
-
-                // Extract table alias and column
-                const colMatch = arg.match(/^([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)$/i);
+        for (const col of stmt.columns) {
+            if (col.expr.type === 'ref') {
+                // Simple column reference
+                columns.push({
+                    expression: this.exprToString(col.expr),
+                    alias: col.alias?.name,
+                    isAggregate: false
+                });
+            } else if (col.expr.type === 'call') {
+                // Function call (potentially aggregate)
+                const funcName = col.expr.function.name.toLowerCase();
+                const isAgg = ['array_agg', 'count', 'sum', 'avg', 'min', 'max'].includes(funcName);
 
                 columns.push({
-                    expression,
-                    alias,
-                    isAggregate: true,
-                    aggregateFunction: func,
-                    aggregateColumn: colMatch ? colMatch[2] : arg,
-                    tableAlias: colMatch ? colMatch[1] : undefined
+                    expression: this.exprToString(col.expr),
+                    alias: col.alias?.name,
+                    isAggregate: isAgg,
+                    aggregateFunction: isAgg ? funcName : undefined,
+                    ...this.extractAggregateDetails(col.expr)
+                });
+            } else if (col.expr.type === 'case') {
+                // CASE expression
+                const caseCol = this.parseCaseExpression(col.expr);
+                columns.push({
+                    ...caseCol,
+                    alias: col.alias?.name
                 });
             } else {
+                // Other expressions
                 columns.push({
-                    expression,
-                    alias,
+                    expression: this.exprToString(col.expr),
+                    alias: col.alias?.name,
                     isAggregate: false
                 });
             }
@@ -199,46 +143,131 @@ export class QueryParser {
         return columns;
     }
 
-    private parseFromClause(query: string): TableReference {
-        const fromMatch = query.match(/FROM\s+([a-z_][a-z0-9_]*)(?:\s+(?:AS\s+)?([a-z_][a-z0-9_]*))?/i);
+    private parseCaseExpression(caseExpr: any): SelectColumn {
+        const caseAggregates: any[] = [];
 
-        if (!fromMatch) {
-            return { tableName: '' };
+        // Parse WHEN/THEN branches
+        if (caseExpr.whens) {
+            for (const when of caseExpr.whens) {
+                if (when.value && when.value.type === 'call') {
+                    const funcName = when.value.function.name.toLowerCase();
+                    if (['array_agg', 'count', 'sum', 'avg', 'min', 'max'].includes(funcName)) {
+                        const details = this.extractAggregateDetails(when.value);
+                        caseAggregates.push({
+                            branch: 'THEN',
+                            aggregateFunction: funcName,
+                            aggregateColumn: details.aggregateColumn,
+                            tableAlias: details.tableAlias,
+                            isSubquery: false
+                        });
+                    }
+                } else if (when.value && when.value.type === 'select') {
+                    // Subquery in THEN
+                    const subquery = when.value as any;  // Cast to any to handle union types
+                    if (subquery.columns && subquery.columns[0]) {
+                        const firstCol = subquery.columns[0];
+                        if (firstCol.expr.type === 'call') {
+                            const funcName = firstCol.expr.function.name.toLowerCase();
+                            const details = this.extractAggregateDetails(firstCol.expr);
+                            const fromTable = this.extractFromTable(subquery);
+
+                            caseAggregates.push({
+                                branch: 'THEN',
+                                aggregateFunction: funcName,
+                                aggregateColumn: details.aggregateColumn,
+                                tableAlias: details.tableAlias,
+                                isSubquery: true,
+                                subqueryTable: fromTable.tableName
+                            });
+                        }
+                    }
+                }
+            }
         }
 
+        // Parse ELSE branch
+        if (caseExpr.else && caseExpr.else.type === 'call') {
+            const funcName = caseExpr.else.function.name.toLowerCase();
+            if (['array_agg', 'count', 'sum', 'avg', 'min', 'max'].includes(funcName)) {
+                const details = this.extractAggregateDetails(caseExpr.else);
+                caseAggregates.push({
+                    branch: 'ELSE',
+                    aggregateFunction: funcName,
+                    aggregateColumn: details.aggregateColumn,
+                    tableAlias: details.tableAlias,
+                    isSubquery: false
+                });
+            }
+        }
+
+        // Use first aggregate for backward compatibility
+        const primary = caseAggregates[0] || {};
+
         return {
-            tableName: fromMatch[1],
-            alias: fromMatch[2]
+            expression: this.exprToString(caseExpr),
+            isAggregate: caseAggregates.length > 0,
+            aggregateFunction: primary.aggregateFunction,
+            aggregateColumn: primary.aggregateColumn,
+            tableAlias: primary.tableAlias,
+            caseAggregates: caseAggregates.length > 0 ? caseAggregates : undefined
         };
     }
 
-    private parseJoins(query: string): JoinClause[] {
+    private extractAggregateDetails(callExpr: any): { aggregateColumn?: string; tableAlias?: string } {
+        if (!callExpr.args || callExpr.args.length === 0) {
+            return {};
+        }
+
+        const firstArg = callExpr.args[0];
+
+        if (firstArg.type === 'ref') {
+            return {
+                aggregateColumn: firstArg.name,
+                tableAlias: firstArg.table?.name
+            };
+        }
+
+        return {};
+    }
+
+    private extractFromTable(stmt: any): TableReference {
+        if (!stmt.from || stmt.from.length === 0) {
+            return { tableName: '' };
+        }
+
+        const from = stmt.from[0];
+
+        if (from.type === 'table') {
+            return {
+                tableName: from.name.name,
+                alias: from.name.alias
+            };
+        }
+
+        return { tableName: '' };
+    }
+
+    private extractJoins(stmt: any): JoinClause[] {
         const joins: JoinClause[] = [];
-        const joinRegex = /(LEFT|RIGHT|INNER|OUTER|CROSS)?\s*JOIN\s+([a-z_][a-z0-9_]*)(?:\s+(?:AS\s+)?([a-z_][a-z0-9_]*))?\s+ON\s+(.+?)(?=\s+(?:LEFT|RIGHT|INNER|OUTER|CROSS)?\s*JOIN|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|$)/gi;
 
-        let match;
-        while ((match = joinRegex.exec(query)) !== null) {
-            const type = match[1] || 'INNER';
-            const tableName = match[2];
-            const alias = match[3];
-            const conditionStr = match[4].trim();
+        if (!stmt.from || stmt.from.length === 0) return joins;
 
-            // Parse ON condition (simple equality)
-            const condMatch = conditionStr.match(/([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s*=\s*([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)/i);
+        // In pgsql-ast-parser, JOINs appear as subsequent elements in the from array
+        // The first element is the main table, subsequent elements with 'join' property are joins
+        for (let i = 1; i < stmt.from.length; i++) {
+            const fromItem = stmt.from[i];
 
-            if (condMatch) {
-                const leftParts = condMatch[1].split('.');
-                const rightParts = condMatch[2].split('.');
+            if (fromItem.type === 'table' && fromItem.join) {
+                const joinType = fromItem.join.type || 'INNER';
+                const condition = this.extractJoinCondition(fromItem.join.on);
 
                 joins.push({
-                    type,
-                    table: { tableName, alias },
-                    condition: {
-                        leftColumn: condMatch[1],
-                        rightColumn: condMatch[2],
-                        leftTable: leftParts[0],
-                        rightTable: rightParts[0]
-                    }
+                    type: joinType.toUpperCase(),
+                    table: {
+                        tableName: fromItem.name?.name || fromItem.name || '',
+                        alias: fromItem.name?.alias || fromItem.alias
+                    },
+                    condition
                 });
             }
         }
@@ -246,51 +275,148 @@ export class QueryParser {
         return joins;
     }
 
-    private parseGroupBy(query: string): string[] {
-        const groupMatch = query.match(/GROUP\s+BY\s+(.+?)(?=\s+ORDER|\s+HAVING|\s+LIMIT|;|$)/i);
-        if (!groupMatch) return [];
+    private extractJoinRecursive(joinItem: any, joins: JoinClause[]): void {
+        // This method is no longer needed with the new structure
+        // Keeping it for backward compatibility but it won't be called
+        if (!joinItem) return;
 
-        return groupMatch[1].split(',').map(col => col.trim());
+        const joinType = joinItem.type || 'INNER';
+
+        if (joinItem.from && joinItem.from.type === 'table') {
+            const condition = this.extractJoinCondition(joinItem.on);
+
+            joins.push({
+                type: joinType.toUpperCase(),
+                table: {
+                    tableName: joinItem.from.name?.name || joinItem.from.name || '',
+                    alias: joinItem.from.name?.alias || joinItem.from.alias
+                },
+                condition
+            });
+        }
+
+        if (joinItem.join) {
+            this.extractJoinRecursive(joinItem.join, joins);
+        }
     }
 
-    private splitByComma(str: string): string[] {
-        const parts: string[] = [];
-        let current = '';
-        let parenDepth = 0;
-        let caseDepth = 0;
-
-        for (let i = 0; i < str.length; i++) {
-            const char = str[i];
-            const remaining = str.substring(i);
-
-            // Check for CASE keyword (start of CASE expression)
-            if (remaining.match(/^CASE\s/i)) {
-                caseDepth++;
-            }
-
-            // Check for END keyword (end of CASE expression)
-            // Make sure it's not part of another word like "APPEND"
-            if (remaining.match(/^END(?:\s|$|,)/i) && caseDepth > 0) {
-                caseDepth--;
-            }
-
-            if (char === '(') {
-                parenDepth++;
-            } else if (char === ')') {
-                parenDepth--;
-            } else if (char === ',' && parenDepth === 0 && caseDepth === 0) {
-                parts.push(current);
-                current = '';
-                continue;
-            }
-
-            current += char;
+    private extractJoinCondition(onExpr: any): JoinCondition {
+        if (!onExpr || onExpr.type !== 'binary') {
+            return { leftColumn: '', rightColumn: '' };
         }
 
-        if (current) {
-            parts.push(current);
-        }
+        const left = onExpr.left;
+        const right = onExpr.right;
 
-        return parts;
+        return {
+            leftColumn: this.exprToString(left),
+            rightColumn: this.exprToString(right),
+            leftTable: left.type === 'ref' ? left.table?.name : undefined,
+            rightTable: right.type === 'ref' ? right.table?.name : undefined
+        };
+    }
+
+    private extractGroupBy(stmt: any): string[] {
+        if (!stmt.groupBy) return [];
+
+        return stmt.groupBy.map((expr: any) => this.exprToString(expr));
+    }
+
+    private extractWhereConditions(stmt: any): WhereCondition[] {
+        const conditions: WhereCondition[] = [];
+
+        if (!stmt.where) return conditions;
+
+        this.walkExpr(stmt.where, (expr) => {
+            if (expr.type === 'binary' && expr.operator === '=') {
+                const left = expr.left;
+                const right = expr.right;
+
+                if (left.type === 'ref') {
+                    const condition: WhereCondition = {
+                        column: left.name,
+                        table: left.table?.name,
+                        operator: '='
+                    };
+
+                    if (right.type === 'parameter') {
+                        condition.paramIndex = right.name ? parseInt(right.name) : undefined;
+                    } else if (right.type === 'integer' || right.type === 'string' || right.type === 'boolean') {
+                        condition.value = right.value;
+                    }
+
+                    conditions.push(condition);
+                }
+            }
+        });
+
+        return conditions;
+    }
+
+    private extractParamMappings(stmt: any): ParamMapping[] {
+        const mappings: ParamMapping[] = [];
+
+        if (!stmt.where) return mappings;
+
+        this.walkExpr(stmt.where, (expr) => {
+            if (expr.type === 'binary') {
+                const left = expr.left;
+                const right = expr.right;
+
+                if (left.type === 'ref' && right.type === 'parameter') {
+                    // Parse parameter name like "$1" to get index 1
+                    const paramName = right.name || '';
+                    const paramIndex = paramName.startsWith('$')
+                        ? parseInt(paramName.substring(1), 10)
+                        : 0;
+
+                    mappings.push({
+                        column: left.name,
+                        table: left.table?.name,
+                        paramIndex,
+                        operator: expr.op || expr.operator
+                    });
+                }
+            }
+        });
+
+        return mappings;
+    }
+
+    private walkExpr(expr: any, callback: (expr: any) => void): void {
+        if (!expr) return;
+
+        callback(expr);
+
+        // Recursively walk sub-expressions
+        if (expr.left) this.walkExpr(expr.left, callback);
+        if (expr.right) this.walkExpr(expr.right, callback);
+        if (expr.operands) {
+            for (const operand of expr.operands) {
+                this.walkExpr(operand, callback);
+            }
+        }
+    }
+
+    private exprToString(expr: any): string {
+        if (!expr) return '';
+
+        switch (expr.type) {
+            case 'ref':
+                return expr.table ? `${expr.table.name}.${expr.name}` : expr.name;
+            case 'integer':
+            case 'string':
+            case 'boolean':
+                return String(expr.value);
+            case 'parameter':
+                return `$${expr.name || '?'}`;
+            case 'call':
+                const args = expr.args ? expr.args.map((a: any) => this.exprToString(a)).join(', ') : '';
+                return `${expr.function.name}(${args})`;
+            case 'binary':
+                return `${this.exprToString(expr.left)} ${expr.operator} ${this.exprToString(expr.right)}`;
+            default:
+                return JSON.stringify(expr);
+        }
     }
 }

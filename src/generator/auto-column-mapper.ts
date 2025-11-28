@@ -79,12 +79,19 @@ export class AutoColumnMapper {
                             }
                         } else {
                             // For subqueries, create a simpler mapping
-                            // We'll need to fetch the parent_id from the main table row
+                            // Extract siblings from WHERE clause params
+                            const siblings = this.extractSiblingsFromParams(
+                                parsed.paramMappings || [],
+                                tableName,
+                                query.params || [],
+                                aliasMap
+                            );
+
                             mappings[mappingKey] = {
                                 table: tableName,
                                 column: caseAgg.aggregateColumn,
                                 type: 'array',
-                                siblings: {} // TODO: Extract from WHERE clause in subquery
+                                siblings
                             };
                         }
                     }
@@ -102,12 +109,59 @@ export class AutoColumnMapper {
                 );
 
                 if (mapping) {
+                    // Add siblings from WHERE clause params
+                    const tableName = mapping.table;
+                    const paramSiblings = this.extractSiblingsFromParams(
+                        parsed.paramMappings || [],
+                        tableName,
+                        query.params || [],
+                        aliasMap
+                    );
+
+                    mapping.siblings = {
+                        ...mapping.siblings,
+                        ...paramSiblings
+                    };
+
                     mappings[field.name] = mapping;
                 }
             }
         }
 
         return mappings;
+    }
+
+    /**
+     * Extract sibling column values from query parameters
+     */
+    private extractSiblingsFromParams(
+        paramMappings: any[],
+        targetTable: string,
+        params: any[],
+        aliasMap?: Map<string, string>
+    ): Record<string, any> {
+        const siblings: Record<string, any> = {};
+
+        for (const mapping of paramMappings) {
+            // Resolve alias to actual table name
+            let mappingTable = mapping.table;
+            if (aliasMap && mappingTable) {
+                const resolvedTable = aliasMap.get(mappingTable);
+                if (resolvedTable) {
+                    mappingTable = resolvedTable;
+                }
+            }
+
+            // Check if this param mapping is for our target table
+            if (mappingTable === targetTable && mapping.paramIndex > 0) {
+                const paramValue = params[mapping.paramIndex - 1]; // $1 is index 0
+                if (paramValue !== undefined) {
+                    siblings[mapping.column] = paramValue;
+                }
+            }
+        }
+
+        return siblings;
     }
 
     private inferArrayAggMapping(
