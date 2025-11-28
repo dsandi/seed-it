@@ -91,26 +91,13 @@ export class SchemaAnalyzer {
   /**
    * Get complete schema for a table
    */
-  async getTableSchema(tableName: string, allPks?: Map<string, string>): Promise<TableSchema> {
+  async getTableSchema(tableName: string): Promise<TableSchema> {
     const [columns, primaryKeys, foreignKeys, indexes] = await Promise.all([
       this.getColumns(tableName),
       this.getPrimaryKeys(tableName),
       this.getForeignKeys(tableName),
       this.getIndexes(tableName),
     ]);
-
-    // Infer virtual foreign keys if we have knowledge of other tables' PKs
-    if (allPks) {
-      const virtualFks = this.inferVirtualForeignKeys(tableName, columns, foreignKeys, allPks, primaryKeys);
-      if (virtualFks.length > 0) {
-        // Merge virtual FKs, avoiding duplicates
-        for (const vfk of virtualFks) {
-          if (!foreignKeys.some(fk => fk.columnName === vfk.columnName)) {
-            foreignKeys.push(vfk);
-          }
-        }
-      }
-    }
 
     return {
       tableName,
@@ -126,121 +113,7 @@ export class SchemaAnalyzer {
    */
   async getAllSchemas(): Promise<TableSchema[]> {
     const tables = await this.getTables();
-
-    // Prefetch all PKs for virtual FK inference
-    const allPks = await this.getAllPrimaryKeys();
-
-    return Promise.all(tables.map(table => this.getTableSchema(table, allPks)));
-  }
-
-  /**
-   * Get Primary Keys for all tables in the schema
-   * Returns a map of TableName -> PrimaryKeyColumnName
-   * Assumes single-column PKs for the heuristic (or takes the first one)
-   */
-  private async getAllPrimaryKeys(): Promise<Map<string, string>> {
-    const result = await this.pool.query(`
-      SELECT t.relname AS table_name, a.attname AS pk_column
-      FROM pg_catalog.pg_index i
-      JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
-      JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
-      JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-      WHERE n.nspname = $1
-        AND i.indisprimary
-      ORDER BY t.relname, a.attnum
-    `, [this.schema]);
-
-    const pks = new Map<string, string>();
-    // If composite PK, this will just take the last one visited, but we filter for single PKs mostly
-    // For the heuristic, we just need *a* PK to match against.
-    // Better: Store all PKs? For now, 1:1 map is simpler for the "contains" check.
-    // Actually, let's just store the first PK column found for each table.
-    const seen = new Set<string>();
-
-    for (const row of result.rows) {
-      if (!seen.has(row.table_name)) {
-        pks.set(row.table_name, row.pk_column);
-        seen.add(row.table_name);
-      }
-    }
-    return pks;
-  }
-
-  /**
-   * Infer Virtual Foreign Keys based on naming conventions
-   */
-  private inferVirtualForeignKeys(
-    tableName: string,
-    columns: ColumnInfo[],
-    existingFks: ForeignKeyInfo[],
-    allPks: Map<string, string>,
-    currentPks: string[]
-  ): ForeignKeyInfo[] {
-    const virtualFks: ForeignKeyInfo[] = [];
-    const existingFkColumns = new Set(existingFks.map(fk => fk.columnName));
-    const currentPkSet = new Set(currentPks);
-
-    // List of generic PK names that are too common to match just by "contains"
-    const GENERIC_PKS = new Set(['id', 'pk', 'uuid', 'uid', '_id', '_pk']);
-
-    for (const col of columns) {
-      // Skip if already a real FK
-      if (existingFkColumns.has(col.columnName)) continue;
-
-      // Skip if it's one of the table's own PKs
-      if (currentPkSet.has(col.columnName)) continue;
-
-      // Heuristic: Check if column name contains the PK name of another table
-      for (const [targetTable, targetPk] of allPks.entries()) {
-        if (targetTable === tableName) {
-          // Handle self-reference: e.g. san_san_pk_parent -> san_pk
-          // If column contains targetPk AND is not the targetPk itself (to avoid mapping PK to itself)
-          if (col.columnName !== targetPk && col.columnName.includes(targetPk)) {
-            virtualFks.push({
-              constraintName: `virtual_fk_${tableName}_${col.columnName}`,
-              columnName: col.columnName,
-              referencedTable: targetTable,
-              referencedColumn: targetPk,
-              onDelete: 'NO ACTION',
-              onUpdate: 'NO ACTION'
-            });
-            break; // Found a match, stop looking for other tables
-          }
-          continue;
-        }
-
-        // Normal FK: Column name contains target PK (e.g. fam_pk_fk contains fam_pk)
-
-        // Guard against generic PKs (like 'id') matching everything (e.g. mobile_device_id -> ach_on_file.id)
-        // If the target PK is generic, we REQUIRE the column to also contain the target table name.
-        if (GENERIC_PKS.has(targetPk.toLowerCase()) || targetPk.length < 3) {
-          if (!col.columnName.includes(targetTable)) {
-            continue;
-          }
-        }
-
-        // Strict check: 
-        // 1. Exact match (mea_pk -> mea_pk)
-        // 2. Suffix/Prefix match with underscore (fam_pk_fk -> fam_pk)
-
-        if (col.columnName === targetPk ||
-          col.columnName.includes(`_${targetPk}`) ||
-          col.columnName.includes(`${targetPk}_`)) {
-
-          virtualFks.push({
-            constraintName: `virtual_fk_${tableName}_${col.columnName}`,
-            columnName: col.columnName,
-            referencedTable: targetTable,
-            referencedColumn: targetPk,
-            onDelete: 'NO ACTION',
-            onUpdate: 'NO ACTION'
-          });
-          break; // Found a match
-        }
-      }
-    }
-
-    return virtualFks;
+    return Promise.all(tables.map(table => this.getTableSchema(table)));
   }
 
   /**
