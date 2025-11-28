@@ -101,7 +101,7 @@ export class SchemaAnalyzer {
 
     // Infer virtual foreign keys if we have knowledge of other tables' PKs
     if (allPks) {
-      const virtualFks = this.inferVirtualForeignKeys(tableName, columns, foreignKeys, allPks);
+      const virtualFks = this.inferVirtualForeignKeys(tableName, columns, foreignKeys, allPks, primaryKeys);
       if (virtualFks.length > 0) {
         // Merge virtual FKs, avoiding duplicates
         for (const vfk of virtualFks) {
@@ -173,18 +173,22 @@ export class SchemaAnalyzer {
     tableName: string,
     columns: ColumnInfo[],
     existingFks: ForeignKeyInfo[],
-    allPks: Map<string, string>
+    allPks: Map<string, string>,
+    currentPks: string[]
   ): ForeignKeyInfo[] {
     const virtualFks: ForeignKeyInfo[] = [];
     const existingFkColumns = new Set(existingFks.map(fk => fk.columnName));
+    const currentPkSet = new Set(currentPks);
+
+    // List of generic PK names that are too common to match just by "contains"
+    const GENERIC_PKS = new Set(['id', 'pk', 'uuid', 'uid', '_id', '_pk']);
 
     for (const col of columns) {
       // Skip if already a real FK
       if (existingFkColumns.has(col.columnName)) continue;
 
-      // Skip if it's the table's own PK (usually) - though self-referencing is possible
-      // We don't have this table's PKs passed in easily here without looking at `primaryKeys` array from caller
-      // but usually a column named `parent_id` is fine.
+      // Skip if it's one of the table's own PKs
+      if (currentPkSet.has(col.columnName)) continue;
 
       // Heuristic: Check if column name contains the PK name of another table
       for (const [targetTable, targetPk] of allPks.entries()) {
@@ -206,11 +210,18 @@ export class SchemaAnalyzer {
         }
 
         // Normal FK: Column name contains target PK (e.g. fam_pk_fk contains fam_pk)
+
+        // Guard against generic PKs (like 'id') matching everything (e.g. mobile_device_id -> ach_on_file.id)
+        // If the target PK is generic, we REQUIRE the column to also contain the target table name.
+        if (GENERIC_PKS.has(targetPk.toLowerCase()) || targetPk.length < 3) {
+          if (!col.columnName.includes(targetTable)) {
+            continue;
+          }
+        }
+
         // Strict check: 
         // 1. Exact match (mea_pk -> mea_pk)
         // 2. Suffix/Prefix match with underscore (fam_pk_fk -> fam_pk)
-        // Avoid partial matches like "user_id" matching "user_identity" table? 
-        // The user's convention is very specific: `_pk`.
 
         if (col.columnName === targetPk ||
           col.columnName.includes(`_${targetPk}`) ||
