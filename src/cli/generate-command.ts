@@ -148,8 +148,6 @@ export async function generateCommand(options: any) {
             // Get OID map for handling JOINs
             const oidMap = await analyzer.getTableOids();
 
-            await analyzer.close();
-
             log.info(chalk.green(`✓ Analyzed ${schemas.length} tables`));
             if (views.length > 0) {
                 log.info(chalk.green(`✓ Found ${views.length} views`));
@@ -194,6 +192,9 @@ export async function generateCommand(options: any) {
             log.info(chalk.green(`✓ Generated seeder:`));
             log.info(chalk.gray(`  ${seederFile}`));
             log.info('');
+
+            // Close analyzer (and pool) after we are done using it
+            await analyzer.close();
         }
 
         await debugLogger.save();
