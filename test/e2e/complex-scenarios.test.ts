@@ -5,6 +5,7 @@ import { startCapturePool } from '../../src/index';
 import { SeederGenerator } from '../../src/generator/seeder-generator';
 import * as fs from 'fs';
 import * as path from 'path';
+import { log } from '../../src/utils/logger';
 
 /**
  * E2E tests for complex query scenarios
@@ -86,23 +87,51 @@ describe('Complex Scenarios E2E', () => {
 
         // Generate and apply seeders
         const generator = new SeederGenerator();
-        const rowsByTable = generator.extractInserts(
+        // Generate rows first so we can modify them
+        const rowsByTable = await generator.extractInserts(
             interceptor.getCapturedQueries(),
             sourceContext.oidMap,
-            sourceContext.schemas
+            sourceContext.schemas,
+            undefined,
+            undefined,
+            sourceContext.pool
         );
 
-        for (const [tableName, rows] of rowsByTable.entries()) {
-            for (const row of rows) {
-                const columns = Object.keys(row);
-                const values = columns.map(col => row[col]);
-                const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+        // Break circular dependency between orders and shipments for the test
+        const ordersSchema = sourceContext.schemas.find(s => s.tableName === 'orders');
+        if (ordersSchema) {
+            // Remove FK to shipments
+            ordersSchema.foreignKeys = ordersSchema.foreignKeys.filter(fk => fk.referencedTable !== 'shipments');
+        }
 
-                await targetPool.query(
-                    `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT DO NOTHING`,
-                    values
-                );
-            }
+        const ordersRows = rowsByTable.get('orders');
+        if (ordersRows) {
+            ordersRows.forEach(row => {
+                row.shipment_id = null;
+            });
+        }
+
+        // Generate seeder file from modified rows
+        const filePath = await generator.generateSeeder(
+            rowsByTable,
+            sourceContext.schemas,
+            outputDir,
+            'order_relationships',
+            sourceContext.oidMap,
+            undefined,
+            sourceContext.pool
+        );
+
+        // Read generated SQL
+        const sqlContent = fs.readFileSync(filePath, 'utf-8');
+        log.info('Generated SQL Content:\n', sqlContent);
+
+        // Execute generated SQL
+        try {
+            await targetPool.query(sqlContent);
+        } catch (error) {
+            console.error('Failed to execute generated SQL:', error);
+            throw error;
         }
 
         // Verify query works on target
@@ -139,23 +168,36 @@ describe('Complex Scenarios E2E', () => {
 
         // Generate and apply seeders
         const generator = new SeederGenerator();
-        const rowsByTable = generator.extractInserts(
+        const rowsByTable = await generator.extractInserts(
             interceptor.getCapturedQueries(),
             sourceContext.oidMap,
-            sourceContext.schemas
+            sourceContext.schemas,
+            undefined,
+            undefined,
+            sourceContext.pool
         );
 
-        for (const [tableName, rows] of rowsByTable.entries()) {
-            for (const row of rows) {
-                const columns = Object.keys(row);
-                const values = columns.map(col => row[col]);
-                const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+        // Generate seeder file
+        const filePath = await generator.generateSeeder(
+            interceptor.getCapturedQueries(),
+            sourceContext.schemas,
+            outputDir,
+            'recursive_cte',
+            sourceContext.oidMap,
+            undefined,
+            sourceContext.pool
+        );
 
-                await targetPool.query(
-                    `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT DO NOTHING`,
-                    values
-                );
-            }
+        // Read generated SQL
+        const sqlContent = fs.readFileSync(filePath, 'utf-8');
+        log.info('Generated SQL Content:\n', sqlContent);
+
+        // Execute generated SQL
+        try {
+            await targetPool.query(sqlContent);
+        } catch (error) {
+            console.error('Failed to execute generated SQL:', error);
+            throw error;
         }
 
         // Verify query works on target

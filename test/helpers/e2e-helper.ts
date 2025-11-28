@@ -5,6 +5,7 @@ import { SchemaAnalyzer } from '../../src/analyzer/schema-analyzer';
 import { TableSchema } from '../../src/types';
 import * as fs from 'fs';
 import * as path from 'path';
+import { log } from '../../src/utils/logger';
 
 export interface E2ETestContext {
     sourcePool: Pool;
@@ -12,6 +13,7 @@ export interface E2ETestContext {
     schemas: TableSchema[];
     oidMap: Map<number, string>;
     outputDir: string;
+    schemaName: string;
 }
 
 export interface E2ETestScenario {
@@ -34,22 +36,22 @@ export async function runE2EScenario(
     context: E2ETestContext,
     scenario: E2ETestScenario
 ): Promise<void> {
-    console.log(`\n========== E2E Scenario: ${scenario.name} ==========`);
+    log.info(`\n========== E2E Scenario: ${scenario.name} ==========`);
 
     // Step 1: Setup data in source DB
-    console.log('Step 1: Setting up test data in source DB...');
+    log.info('Step 1: Setting up test data in source DB...');
     try {
         await scenario.setupData(context.sourcePool);
-        console.log('✓ Test data setup complete');
+        log.info('✓ Test data setup complete');
     } catch (error) {
-        console.error('✗ Failed to setup test data:', error);
+        log.error('✗ Failed to setup test data:', error);
         throw error;
     }
 
     // Step 2: Capture query execution
-    console.log('\nStep 2: Executing query and capturing results...');
-    console.log('Query:', scenario.query.trim());
-    console.log('Params:', JSON.stringify(scenario.params));
+    log.info('\nStep 2: Executing query and capturing results...');
+    log.info('Query:', scenario.query.trim());
+    log.info('Params:', JSON.stringify(scenario.params));
 
     const interceptor = startCapturePool(context.sourcePool, scenario.name, {
         outputDir: context.outputDir,
@@ -59,10 +61,10 @@ export async function runE2EScenario(
     let sourceResult;
     try {
         sourceResult = await context.sourcePool.query(scenario.query, scenario.params);
-        console.log(`✓ Source query returned ${sourceResult.rows.length} rows`);
-        console.log('Sample row:', JSON.stringify(sourceResult.rows[0], null, 2));
+        log.info(`✓ Source query returned ${sourceResult.rows.length} rows`);
+        log.info('Sample row:', JSON.stringify(sourceResult.rows[0], null, 2));
     } catch (error) {
-        console.error('✗ Source query failed:', error);
+        log.error('✗ Source query failed:', error);
         throw error;
     }
 
@@ -70,36 +72,46 @@ export async function runE2EScenario(
     expect(sourceResult.rows.length).toBeGreaterThan(0);
 
     // Step 3: Generate seeders
-    console.log('\nStep 3: Generating seeders from captured data...');
+    log.info('\nStep 3: Generating seeders from captured data...');
     const capturedQueries = interceptor.getCapturedQueries();
-    console.log(`Captured ${capturedQueries.length} queries`);
+    log.info(`Captured ${capturedQueries.length} queries`);
 
     expect(capturedQueries.length).toBeGreaterThan(0);
 
     const generator = new SeederGenerator();
     let rowsByTable;
     try {
-        rowsByTable = generator.extractInserts(
+        rowsByTable = await generator.extractInserts(
             capturedQueries,
-            context.oidMap,
-            context.schemas
+            undefined,
+            context.schemas,
+            undefined, // columnMappings
+            undefined, // debugLogger
+            context.sourcePool
         );
-        console.log('✓ Seeder generation complete');
-        console.log('Tables with data:');
+        log.info('✓ Seeder generation complete');
+        log.info('Tables with data:');
         for (const [tableName, rows] of rowsByTable.entries()) {
-            console.log(`  - ${tableName}: ${rows.length} rows`);
+            log.info(`  - ${tableName}: ${rows.length} rows`);
         }
     } catch (error) {
-        console.error('✗ Seeder generation failed:', error);
+        log.error('✗ Seeder generation failed:', error);
         throw error;
     }
 
     // Step 4: Apply seeders to target DB
-    console.log('\nStep 4: Applying seeders to target DB...');
+    log.info('\nStep 4: Applying seeders to target DB...');
+
+    // Sort tables by dependency order
+    const { DependencyResolver } = require('../../src/generator/dependency-resolver');
+    const resolver = new DependencyResolver();
+    const { order } = resolver.resolveInsertionOrder(context.schemas);
+
     let insertCount = 0;
     try {
-        for (const [tableName, rows] of rowsByTable.entries()) {
-            if (rows.length === 0) continue;
+        for (const tableName of order) {
+            const rows = rowsByTable.get(tableName);
+            if (!rows || rows.length === 0) continue;
 
             for (const row of rows) {
                 const columns = Object.keys(row);
@@ -116,33 +128,33 @@ export async function runE2EScenario(
                 insertCount++;
             }
         }
-        console.log(`✓ Applied ${insertCount} INSERT statements to target DB`);
+        log.info(`✓ Applied ${insertCount} INSERT statements to target DB`);
     } catch (error) {
-        console.error('✗ Failed to apply seeders:', error);
-        console.error('Last attempted table:', Array.from(rowsByTable.keys()).pop());
+        log.error('✗ Failed to apply seeders:', error);
+        log.error('Last attempted table:', Array.from(rowsByTable.keys()).pop());
         throw error;
     }
 
     // Step 5: Verify query works on target with same results
-    console.log('\nStep 5: Verifying query works on target DB...');
+    log.info('\nStep 5: Verifying query works on target DB...');
     let targetResult;
     try {
         targetResult = await context.targetPool.query(scenario.query, scenario.params);
-        console.log(`✓ Target query returned ${targetResult.rows.length} rows`);
-        console.log('Sample row:', JSON.stringify(targetResult.rows[0], null, 2));
+        log.info(`✓ Target query returned ${targetResult.rows.length} rows`);
+        log.info('Sample row:', JSON.stringify(targetResult.rows[0], null, 2));
     } catch (error) {
-        console.error('✗ Target query failed:', error);
+        log.error('✗ Target query failed:', error);
         throw error;
     }
 
     // Compare row counts
-    console.log('\nStep 6: Comparing results...');
-    console.log(`Source rows: ${sourceResult.rows.length}, Target rows: ${targetResult.rows.length}`);
+    log.info('\nStep 6: Comparing results...');
+    log.info(`Source rows: ${sourceResult.rows.length}, Target rows: ${targetResult.rows.length}`);
 
     if (targetResult.rows.length !== sourceResult.rows.length) {
-        console.error('✗ Row count mismatch!');
-        console.error('Source result:', JSON.stringify(sourceResult.rows, null, 2));
-        console.error('Target result:', JSON.stringify(targetResult.rows, null, 2));
+        log.error('✗ Row count mismatch!');
+        log.error('Source result:', JSON.stringify(sourceResult.rows, null, 2));
+        log.error('Target result:', JSON.stringify(targetResult.rows, null, 2));
     }
 
     expect(targetResult.rows.length).toBe(sourceResult.rows.length);
@@ -156,24 +168,24 @@ export async function runE2EScenario(
         for (const key in sourceRow) {
             if (Array.isArray(sourceRow[key])) {
                 if (JSON.stringify(targetRow[key]) !== JSON.stringify(sourceRow[key])) {
-                    console.error(`✗ Array mismatch at row ${i}, column ${key}`);
-                    console.error('Source:', sourceRow[key]);
-                    console.error('Target:', targetRow[key]);
+                    log.error(`✗ Array mismatch at row ${i}, column ${key}`);
+                    log.error('Source:', sourceRow[key]);
+                    log.error('Target:', targetRow[key]);
                 }
                 expect(targetRow[key]).toEqual(sourceRow[key]);
             } else {
                 if (targetRow[key] !== sourceRow[key]) {
-                    console.error(`✗ Value mismatch at row ${i}, column ${key}`);
-                    console.error('Source:', sourceRow[key]);
-                    console.error('Target:', targetRow[key]);
+                    log.error(`✗ Value mismatch at row ${i}, column ${key}`);
+                    log.error('Source:', sourceRow[key]);
+                    log.error('Target:', targetRow[key]);
                 }
-                expect(targetRow[key]).toBe(sourceRow[key]);
+                expect(targetRow[key]).toEqual(sourceRow[key]);
             }
         }
     }
 
-    console.log('✓ All results match!');
-    console.log('========================================\n');
+    log.info('✓ All results match!');
+    log.info('========================================\n');
 }
 
 /**
@@ -198,12 +210,13 @@ export async function setupE2EContext(testName: string): Promise<E2ETestContext>
         password: 'test_password'
     });
 
-    // Clean both databases - drop and recreate public schema
+    // Generate unique schema name
+    const schemaName = `test_schema_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+    // Clean both databases
     for (const pool of [sourcePool, targetPool]) {
-        await pool.query('DROP SCHEMA IF EXISTS public CASCADE');
-        await pool.query('CREATE SCHEMA public');
-        await pool.query('GRANT ALL ON SCHEMA public TO test_user');
-        await pool.query('GRANT ALL ON SCHEMA public TO public');
+        await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+        await pool.query(`SET search_path TO ${schemaName}, public`);
     }
 
     // Create schema in both
@@ -218,7 +231,8 @@ export async function setupE2EContext(testName: string): Promise<E2ETestContext>
         host: 'localhost',
         port: 5433,
         user: 'test_user',
-        password: 'test_password'
+        password: 'test_password',
+        schema: schemaName
     });
 
     const schemas = await analyzer.getAllSchemas();
@@ -236,7 +250,8 @@ export async function setupE2EContext(testName: string): Promise<E2ETestContext>
         targetPool,
         schemas,
         oidMap,
-        outputDir
+        outputDir,
+        schemaName
     };
 }
 
@@ -244,8 +259,13 @@ export async function setupE2EContext(testName: string): Promise<E2ETestContext>
  * Cleanup E2E test context
  */
 export async function teardownE2EContext(context: E2ETestContext): Promise<void> {
-    await context.sourcePool.end();
-    await context.targetPool.end();
+    if (context.sourcePool) {
+        await context.sourcePool.query(`DROP SCHEMA IF EXISTS ${context.schemaName} CASCADE`);
+        await context.sourcePool.end();
+    }
+    if (context.targetPool) {
+        await context.targetPool.end();
+    }
 
     if (fs.existsSync(context.outputDir)) {
         fs.rmSync(context.outputDir, { recursive: true });

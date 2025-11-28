@@ -1,5 +1,6 @@
 import { CapturedQuery } from '../types';
 import { parse, SelectStatement, Expr, ExprRef, Statement } from 'pgsql-ast-parser';
+import { log } from '../utils/logger';
 
 /**
  * Parsed SQL query structure
@@ -11,6 +12,7 @@ export interface ParsedQuery {
     groupBy: string[];
     whereConditions: WhereCondition[];
     paramMappings: ParamMapping[];
+    referencedTables: string[];
 }
 
 export interface SelectColumn {
@@ -69,10 +71,20 @@ export interface ParamMapping {
 export class QueryParser {
     parse(query: string): ParsedQuery | null {
         try {
-            const ast = parse(query);
+            // workaround: pgsql-ast-parser might not support RECURSIVE keyword
+            const sanitizedQuery = query.replace(/WITH\s+RECURSIVE/i, 'WITH');
+            const ast = parse(sanitizedQuery);
             if (!ast || ast.length === 0) return null;
 
-            const stmt = ast[0];
+            let stmt = ast[0];
+            let rootWith: any = null;
+
+            // Handle WITH statement (CTE)
+            if (stmt.type === 'with') {
+                rootWith = stmt;
+                stmt = stmt.in;
+            }
+
             if (stmt.type !== 'select') return null;
 
             const selectStmt = stmt as SelectStatement;
@@ -83,19 +95,97 @@ export class QueryParser {
                 return null;
             }
 
+            const referencedTables = this.extractReferencedTables(selectStmt);
+
+            // If we had a root WITH, extract tables from it too
+            if (rootWith) {
+                const cteTables = this.extractReferencedTables(rootWith);
+                cteTables.forEach(t => referencedTables.add(t));
+            }
+
             return {
                 selectColumns: this.extractSelectColumns(selectStmt),
                 fromTable: this.extractFromTable(selectStmt),
                 joins: this.extractJoins(selectStmt),
                 groupBy: this.extractGroupBy(selectStmt),
                 whereConditions: this.extractWhereConditions(selectStmt),
-                paramMappings: this.extractParamMappings(selectStmt)
+                paramMappings: this.extractParamMappings(selectStmt),
+                referencedTables: Array.from(referencedTables)
             };
         } catch (error) {
-            console.error('Failed to parse query with AST parser:', error);
+            log.error('Failed to parse query with AST parser:', error);
             // Return null to indicate parsing failure
             return null;
         }
+    }
+
+    private extractReferencedTables(stmt: any): Set<string> {
+        const tables = new Set<string>();
+
+        // 1. Handle WITH clause (CTEs) - either root WITH or nested with
+        if (stmt.type === 'with') {
+            if (stmt.bind) {
+                for (const cte of stmt.bind) {
+                    // log.debug('Processing CTE:', cte.alias.name);
+                    if (cte.statement) {
+                        const cteTables = this.extractReferencedTables(cte.statement);
+                        cteTables.forEach(t => tables.add(t));
+                    }
+                }
+            }
+            // Also process the main query inside the WITH
+            if (stmt.in) {
+                const inTables = this.extractReferencedTables(stmt.in);
+                inTables.forEach(t => tables.add(t));
+            }
+            return tables;
+        }
+
+        // 2. Handle FROM clause
+        if (stmt.from) {
+            for (const fromItem of stmt.from) {
+                if (fromItem.type === 'table') {
+                    tables.add(fromItem.name.name);
+                } else if (fromItem.type === 'statement') {
+                    // Subquery in FROM
+                    const subTables = this.extractReferencedTables(fromItem.statement);
+                    subTables.forEach(t => tables.add(t));
+                }
+
+                // Handle Joins (which are part of FROM array in this parser)
+                if (fromItem.join) {
+                    // The table being joined is already handled above if it's a 'table' type
+                    // But we need to check if the join source is a subquery
+                    // Actually, fromItem IS the join item.
+                    // If fromItem.type is 'table', we added it.
+                    // If fromItem.type is 'statement', we added it.
+                }
+            }
+        }
+
+        // 3. Handle nested WITH on SelectStatement (if parser supports it this way)
+        if (stmt.with) {
+            for (const cte of stmt.with) {
+                if (cte.stmt) {
+                    const cteTables = this.extractReferencedTables(cte.stmt);
+                    cteTables.forEach(t => tables.add(t));
+                }
+            }
+        }
+
+        // 4. Handle UNION / UNION ALL
+        if (stmt.type === 'union' || stmt.type === 'union all') {
+            if (stmt.left) {
+                const leftTables = this.extractReferencedTables(stmt.left);
+                leftTables.forEach(t => tables.add(t));
+            }
+            if (stmt.right) {
+                const rightTables = this.extractReferencedTables(stmt.right);
+                rightTables.forEach(t => tables.add(t));
+            }
+        }
+
+        return tables;
     }
 
     private extractSelectColumns(stmt: any): SelectColumn[] {

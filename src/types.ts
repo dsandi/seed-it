@@ -54,6 +54,7 @@ export interface DatabaseConfig {
     user: string;
     password?: string;
     ssl?: boolean | { rejectUnauthorized?: boolean; ca?: string; key?: string; cert?: string };
+    schema?: string;
 }
 
 export interface Config {

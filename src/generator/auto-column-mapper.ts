@@ -13,7 +13,7 @@ export class AutoColumnMapper {
     inferMappings(
         query: CapturedQuery,
         schemas: TableSchema[],
-        oidMap: Map<number, string>
+        oidMap?: Map<number, string>
     ): Record<string, ColumnMapping> {
         const mappings: Record<string, ColumnMapping> = {};
 

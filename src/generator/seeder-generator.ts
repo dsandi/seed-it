@@ -5,7 +5,9 @@ import { CapturedQuery, TableSchema } from '../types';
 import { DependencyResolver } from './dependency-resolver';
 import { Deduplicator } from './deduplicator';
 import { AutoColumnMapper } from './auto-column-mapper';
+import { log } from '../utils/logger';
 import { DependencyFetcher } from './dependency-fetcher';
+import { QueryParser } from '../parser/query-parser';
 
 /**
  * Seeder generator that creates SQL INSERT statements from captured data
@@ -15,94 +17,208 @@ export class SeederGenerator {
     private deduplicator = new Deduplicator();
     private debugLogger?: any;
     private autoMapper = new AutoColumnMapper();
+    private queryParser = new QueryParser();
+    private dependencyFetcher = new DependencyFetcher();
 
     /**
      * Extract INSERT data from captured queries
      */
-    extractInserts(
+    async extractInserts(
         queries: CapturedQuery[],
         oidMap?: Map<number, string>,
         schemas?: TableSchema[],
         columnMappings?: Record<string, any>,
-        debugLogger?: any
-    ): Map<string, Record<string, any>[]> {
+        debugLogger?: any,
+        pool?: Pool
+    ): Promise<Map<string, Record<string, any>[]>> {
+        log.debug('[DEBUG] extractInserts called with', queries.length, 'queries');
         this.debugLogger = debugLogger;
         const rowsByTable = new Map<string, Record<string, any>[]>();
         let ignoredCount = 0;
 
         for (const query of queries) {
+            log.debug('[DEBUG] Processing query:', query.query.substring(0, 50));
             const normalized = query.query.trim().toUpperCase();
 
             // Handle both INSERT (legacy/write capture) and SELECT (read capture)
-            if (normalized.startsWith('INSERT') || normalized.startsWith('SELECT')) {
-                // Try automatic column mapping inference first
-                let effectiveMappings = columnMappings || {};
+            if (!normalized.startsWith('INSERT') && !normalized.startsWith('SELECT') && !normalized.startsWith('WITH')) {
+                continue;
+            }
 
-                if (oidMap && schemas && Object.keys(effectiveMappings).length === 0) {
-                    const inferredMappings = this.autoMapper.inferMappings(query, schemas, oidMap);
+            // Strategy:
+            // 1. Identify tables involved (using QueryParser)
+            // 2. Extract partial rows (simple mapping)
+            // 3. Accumulate partial rows
+            // 4. Later: Enrich with complete data
 
-                    if (this.debugLogger) {
-                        this.debugLogger.log('inference_attempt', {
-                            query: query.query,
-                            inferredCount: Object.keys(inferredMappings).length,
-                            mappings: inferredMappings
-                        });
-                    }
+            let extractedForQuery = new Map<string, Record<string, any>[]>();
+            const identifiedTables = new Set<string>();
 
-                    if (Object.keys(inferredMappings).length > 0) {
-                        effectiveMappings = { ...inferredMappings, ...effectiveMappings };
-                    }
-                }
-
-                // Try column mappings (manual or inferred)
-                if (effectiveMappings && Object.keys(effectiveMappings).length > 0) {
-                    const mapped = this.processColumnMappings(query, effectiveMappings);
-
-                    if (mapped.size > 0) {
-                        for (const [table, rows] of mapped.entries()) {
-                            if (!rowsByTable.has(table)) {
-                                rowsByTable.set(table, []);
-                            }
-                            rowsByTable.get(table)!.push(...rows);
-                        }
-                        // Continue to also process OID mapping (for non-mapped columns)
-                    }
-                }
-
-                // Try to extract data using OID mapping (most accurate for JOINs)
-                if (oidMap && query.result && query.result.fields) {
-                    const extracted = this.extractRowsWithOids(query, oidMap, schemas);
-
-                    if (extracted.size > 0) {
-                        for (const [table, rows] of extracted.entries()) {
-                            if (!rowsByTable.has(table)) {
-                                rowsByTable.set(table, []);
-                            }
-                            rowsByTable.get(table)!.push(...rows);
-                        }
-                        continue; // Successfully processed with OIDs
-                    }
-                }
-
-                // Fallback to regex parsing (legacy/simple queries)
+            // 1. Identify tables using QueryParser
+            const parsed = this.queryParser.parse(query.query);
+            if (parsed) {
+                parsed.referencedTables.forEach(table => identifiedTables.add(table));
+            } else {
+                // Fallback: Simple table name extraction for simple queries
                 const tableName = this.extractTableName(query.query);
-                const rows = this.extractRowData(query);
+                if (tableName) identifiedTables.add(tableName);
+            }
 
-                if (tableName && rows.length > 0) {
-                    if (!rowsByTable.has(tableName)) {
-                        rowsByTable.set(tableName, []);
+            // Filter out tables that don't exist in the schema (e.g. CTE names)
+            if (schemas) {
+                const validTables = new Set(schemas.map(s => s.tableName));
+                for (const table of identifiedTables) {
+                    if (!validTables.has(table)) {
+                        identifiedTables.delete(table);
                     }
-                    rowsByTable.get(tableName)!.push(...rows);
-                } else if (debugLogger) {
-                    debugLogger.log('ignored_query', {
-                        reason: !tableName ? 'no_table_name' : 'no_rows',
-                        query: query.query,
-                        extractedTable: tableName,
-                        rowCount: rows.length
+                }
+            }
+
+            // 2. Extract partial rows
+            const rows = this.extractRowData(query);
+
+            // 3. Infer values from parameters (e.g. WHERE id = $1)
+            const inferredValues = new Map<string, Record<string, any>>();
+            if (parsed && parsed.paramMappings && query.params) {
+                // Build alias map
+                const aliasMap = new Map<string, string>();
+                if (parsed.fromTable && parsed.fromTable.alias) {
+                    aliasMap.set(parsed.fromTable.alias, parsed.fromTable.tableName);
+                }
+                if (parsed.joins) {
+                    for (const join of parsed.joins) {
+                        if (join.table.alias) {
+                            aliasMap.set(join.table.alias, join.table.tableName);
+                        }
+                    }
+                }
+
+                for (const mapping of parsed.paramMappings) {
+                    if (mapping.operator === '=' && mapping.paramIndex > 0 && mapping.paramIndex <= query.params.length) {
+                        const value = query.params[mapping.paramIndex - 1];
+                        let tableName = mapping.table || (parsed.fromTable ? parsed.fromTable.tableName : undefined);
+
+                        // Resolve alias if present
+                        if (tableName && aliasMap.has(tableName)) {
+                            tableName = aliasMap.get(tableName);
+                        }
+
+                        if (tableName) {
+                            if (!inferredValues.has(tableName)) {
+                                inferredValues.set(tableName, {});
+                            }
+                            inferredValues.get(tableName)![mapping.column] = value;
+                        }
+                    }
+                }
+            }
+
+            if (rows.length > 0 && identifiedTables.size > 0) {
+                for (const table of identifiedTables) {
+                    if (!extractedForQuery.has(table)) extractedForQuery.set(table, []);
+
+                    // Clone rows and apply inferred values for this table
+                    const tableRows = rows.map(row => {
+                        const newRow = { ...row };
+                        const inferred = inferredValues.get(table);
+                        if (inferred) {
+                            Object.assign(newRow, inferred);
+                        }
+                        return newRow;
                     });
+
+                    extractedForQuery.get(table)!.push(...tableRows);
                 }
             } else {
+                // We add the same raw row to every identified table's bucket
+                // The enrichment phase will filter out invalid ones (those missing keys)
+                // If no rows were extracted from query.result, but we inferred values,
+                // we should still add them as a potential row.
+                if (identifiedTables.size > 0 && inferredValues.size > 0) {
+                    for (const table of identifiedTables) {
+                        const inferred = inferredValues.get(table);
+                        if (inferred && Object.keys(inferred).length > 0) {
+                            if (!extractedForQuery.has(table)) extractedForQuery.set(table, []);
+                            extractedForQuery.get(table)!.push(inferred);
+                        }
+                    }
+                }
+            }
+
+            // Merge into main results
+            if (extractedForQuery.size > 0) {
+                for (const [table, rows] of extractedForQuery.entries()) {
+                    if (!rowsByTable.has(table)) rowsByTable.set(table, []);
+                    rowsByTable.get(table)!.push(...rows);
+                }
+            } else {
+                if (debugLogger) {
+                    debugLogger.log('ignored_query', { query: query.query, reason: 'no_data_extracted' });
+                }
                 ignoredCount++;
+            }
+        }
+
+        // Phase 2: Enrichment - Fetch complete rows from source DB
+        // This is the "Human-Like" step: "Go and query those rows to extract the values"
+        // Phase 2: Enrichment - Fetch complete rows from source DB
+        // This is the "Human-Like" step: "Go and query those rows to extract the values"
+        if (pool && schemas && rowsByTable.size > 0) {
+            log.debug(`[seed-it] Starting enrichment phase for ${rowsByTable.size} tables`);
+            // Debug: Log rows before enrichment
+            for (const [table, rows] of rowsByTable.entries()) {
+                if (rows.length > 0) {
+                    log.debug(`[DEBUG] Before enrichment ${table}:`, JSON.stringify(rows[0]));
+                }
+            }
+            await this.enrichRowsWithCompleteData(rowsByTable, pool, schemas);
+            // Debug: Log rows after enrichment
+            for (const [table, rows] of rowsByTable.entries()) {
+                if (rows.length > 0) {
+                    log.debug(`[DEBUG] After enrichment ${table}:`, JSON.stringify(rows[0]));
+                }
+            }
+        }
+
+        // Filter columns to ensure we only return valid columns for each table
+        if (schemas && rowsByTable.size > 0) {
+            for (const [table, rows] of rowsByTable.entries()) {
+                const schema = schemas.find(s => s.tableName === table);
+                if (schema) {
+                    const validColumns = new Set(schema.columns.map(c => c.columnName));
+                    const validRows: Record<string, any>[] = [];
+
+                    for (const row of rows) {
+                        const filteredRow: Record<string, any> = {};
+                        let hasColumns = false;
+                        for (const key of Object.keys(row)) {
+                            if (validColumns.has(key)) {
+                                filteredRow[key] = row[key];
+                                hasColumns = true;
+                            }
+                        }
+                        if (hasColumns) {
+                            validRows.push(filteredRow);
+                        }
+                    }
+                    log.debug(`[DEBUG] Filtered ${table}: ${rows.length} -> ${validRows.length} rows`);
+                    rowsByTable.set(table, validRows);
+                }
+            }
+        }
+
+        // Phase 3: Fetch missing dependencies (transitive)
+        if (pool && schemas && rowsByTable.size > 0) {
+            log.debug(`[seed-it] Fetching dependencies for ${rowsByTable.size} tables`);
+            const enrichedRows = await this.dependencyFetcher.fetchDependencies(rowsByTable, schemas, pool, this.debugLogger);
+
+            // Merge fetched dependencies back into rowsByTable
+            for (const [table, rows] of enrichedRows.entries()) {
+                if (!rowsByTable.has(table)) {
+                    rowsByTable.set(table, []);
+                }
+                // We might have duplicates here, but Deduplicator will handle them later
+                rowsByTable.get(table)!.push(...rows);
             }
         }
 
@@ -113,133 +229,92 @@ export class SeederGenerator {
         return rowsByTable;
     }
 
+
+
     /**
-     * Extract rows using OID metadata to map columns to tables
+     * Enrich partial rows with complete data from the source database
+     * Uses Primary Keys or Unique Indexes to fetch the full row
      */
-    private extractRowsWithOids(
-        query: CapturedQuery,
-        oidMap: Map<number, string>,
-        schemas?: TableSchema[]
-    ): Map<string, Record<string, any>[]> {
-        const rowsByTable = new Map<string, Record<string, any>[]>();
+    private async enrichRowsWithCompleteData(
+        rowsByTable: Map<string, Record<string, any>[]>,
+        pool: Pool,
+        schemas: TableSchema[]
+    ): Promise<void> {
+        for (const [table, rows] of rowsByTable.entries()) {
+            const schema = schemas.find(s => s.tableName === table);
+            if (!schema) continue;
 
-        if (!query.result || !query.result.rows || query.result.rows.length === 0 || !query.result.fields) {
-            return rowsByTable;
-        }
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
 
-        // Map each field to a table name (using OID when available)
-        const fieldMap: { index: number; table: string; column: string }[] = [];
-        const skippedFields: string[] = [];
+                // Skip if row seems complete (heuristic: has more columns than just PK/Unique)
+                // or if we've already fetched it (check for a known non-key column if possible)
+                // For now, we'll try to fetch if we have keys, to be safe and ensure we get all columns.
 
-        query.result.fields.forEach((field: any, index: number) => {
-            const tableName = oidMap.get(field.tableID);
-            if (tableName) {
-                fieldMap.push({
-                    index,
-                    table: tableName,
-                    column: field.name
-                });
-            } else {
-                skippedFields.push(`${field.name} (TableID: ${field.tableID})`);
-            }
-        });
+                let fetchQuery = '';
+                let fetchValues: any[] = [];
 
-        // Log skipped fields if any
-        if (this.debugLogger && skippedFields.length > 0) {
-            this.debugLogger.log('skipped_columns', {
-                query: query.query,
-                reason: 'missing_oid_mapping_or_calculated_field',
-                skipped: skippedFields
-            });
-        }
-
-        // If we have no OID mappings, try to infer the main table from the query
-        // and include ALL columns for that table
-        if (fieldMap.length === 0 && schemas) {
-            const tableName = this.extractTableName(query.query);
-            if (tableName) {
-                // Add all fields to this table
-                query.result.fields.forEach((field: any, index: number) => {
-                    fieldMap.push({
-                        index,
-                        table: tableName,
-                        column: field.name
-                    });
-                });
-
-                if (this.debugLogger) {
-                    this.debugLogger.log('fallback_table_inference', {
-                        query: query.query,
-                        inferredTable: tableName,
-                        columnCount: fieldMap.length
-                    });
-                }
-            }
-        }
-
-        if (fieldMap.length === 0) {
-            return rowsByTable;
-        }
-
-        // Process each row
-        for (const row of query.result.rows) {
-            // Create a partial row for each table involved
-            const partialRows = new Map<string, Record<string, any>>();
-
-            for (const field of fieldMap) {
-                if (!partialRows.has(field.table)) {
-                    partialRows.set(field.table, {});
+                // 1. Try Primary Keys
+                const pkValues: any[] = [];
+                let hasPK = true;
+                if (schema.primaryKeys.length > 0) {
+                    for (const pk of schema.primaryKeys) {
+                        if (row[pk] !== undefined) {
+                            pkValues.push(row[pk]);
+                        } else {
+                            hasPK = false;
+                            break;
+                        }
+                    }
+                } else {
+                    hasPK = false;
                 }
 
-                // Note: pg driver returns rows as objects with column names as keys.
-                // If there are duplicate column names, the last one wins in the object.
-                // This is a limitation of the default pg output.
-                const val = row[field.column];
-                if (val !== undefined) {
-                    partialRows.get(field.table)![field.column] = val;
-                }
-            }
+                if (hasPK && pkValues.length > 0) {
+                    const pkConditions = schema.primaryKeys.map((pk, idx) => `${pk} = $${idx + 1}`).join(' AND ');
+                    fetchQuery = `SELECT * FROM ${table} WHERE ${pkConditions} LIMIT 1`;
+                    fetchValues = pkValues;
+                } else {
+                    // 2. Try Unique Indexes
+                    for (const index of schema.indexes) {
+                        if (!index.isUnique) continue;
 
-            // Auto-fill foreign keys from related tables in the result set
-            if (schemas) {
-                for (const [table, data] of partialRows.entries()) {
-                    const schema = schemas.find(s => s.tableName === table);
-                    if (!schema) continue;
-
-                    // Find foreign keys that are missing from the result
-                    for (const fk of schema.foreignKeys) {
-                        if (data[fk.columnName] !== undefined) continue;
-
-                        // Try to find the value from the referenced table's row
-                        const referencedRow = partialRows.get(fk.referencedTable);
-                        if (referencedRow && referencedRow[fk.referencedColumn] !== undefined) {
-                            data[fk.columnName] = referencedRow[fk.referencedColumn];
-
-                            if (this.debugLogger) {
-                                this.debugLogger.log('auto_filled_fk', {
-                                    table,
-                                    column: fk.columnName,
-                                    value: referencedRow[fk.referencedColumn],
-                                    from: `${fk.referencedTable}.${fk.referencedColumn}`
-                                });
+                        const indexValues: any[] = [];
+                        let hasIndex = true;
+                        for (const col of index.columns) {
+                            if (row[col] !== undefined) {
+                                indexValues.push(row[col]);
+                            } else {
+                                hasIndex = false;
+                                break;
                             }
+                        }
+
+                        if (hasIndex && indexValues.length > 0) {
+                            const indexConditions = index.columns.map((col, idx) => `${col} = $${idx + 1}`).join(' AND ');
+                            fetchQuery = `SELECT * FROM ${table} WHERE ${indexConditions} LIMIT 1`;
+                            fetchValues = indexValues;
+                            // log.debug(`[seed-it] Found unique index for ${table}: ${index.indexName} (${index.columns.join(', ')})`);
+                            break;
                         }
                     }
                 }
-            }
 
-            // Add partial rows to result
-            for (const [table, data] of partialRows.entries()) {
-                if (Object.keys(data).length > 0) {
-                    if (!rowsByTable.has(table)) {
-                        rowsByTable.set(table, []);
+                if (fetchQuery) {
+                    try {
+                        // log.debug(`[seed-it] Fetching complete row for ${table} with values:`, fetchValues);
+                        const result = await pool.query(fetchQuery, fetchValues);
+                        if (result.rows.length > 0) {
+                            // Merge complete row with existing data (preserving any calculated fields if they exist)
+                            rows[i] = { ...row, ...result.rows[0] };
+                            // log.debug(`[seed-it] ✓ Fetched complete row for ${table}`);
+                        }
+                    } catch (error: any) {
+                        log.debug(`[seed-it] ✗ Error fetching complete row for ${table}:`, error.message);
                     }
-                    rowsByTable.get(table)!.push(data);
                 }
             }
         }
-
-        return rowsByTable;
     }
 
     /**
@@ -337,18 +412,17 @@ export class SeederGenerator {
     }
 
     /**
-     * Extract row data from captured query
-     * This is a simplified version - you may need to enhance based on your query format
+     * Extract row data from query result
      */
-    private extractRowData(capturedQuery: CapturedQuery): Record<string, any>[] {
+    private extractRowData(query: CapturedQuery): Record<string, any>[] {
         // If the result contains the inserted rows, use that
-        if (capturedQuery.result && capturedQuery.result.rows) {
-            return capturedQuery.result.rows;
+        if (query.result && query.result.rows) {
+            return query.result.rows;
         }
 
         // Otherwise, try to parse from the query and params
         // This is a fallback and may not work for all cases
-        return this.parseInsertQuery(capturedQuery.query, capturedQuery.params);
+        return this.parseInsertQuery(query.query, query.params);
     }
 
     /**
@@ -378,7 +452,14 @@ export class SeederGenerator {
      * Generate INSERT statement for a row
      */
     private generateInsertStatement(tableName: string, row: Record<string, any>, schema?: TableSchema): string {
-        const columns = Object.keys(row);
+        let columns = Object.keys(row);
+
+        // Filter columns if schema is available to avoid inserting non-existent columns (e.g. from joins)
+        if (schema) {
+            const validColumns = new Set(schema.columns.map(c => c.columnName));
+            columns = columns.filter(col => validColumns.has(col));
+        }
+
         const values = columns.map(col => {
             const val = row[col];
             if (val === null || val === undefined) return 'NULL';
@@ -433,7 +514,7 @@ export class SeederGenerator {
      * Generate seeder file
      */
     async generateSeeder(
-        queries: CapturedQuery[],
+        queriesOrRows: CapturedQuery[] | Map<string, Record<string, any>[]>,
         schemas: TableSchema[],
         outputDir: string,
         seederName: string = 'initial_data',
@@ -444,8 +525,15 @@ export class SeederGenerator {
     ): Promise<string> {
         // ...
 
-        // Extract INSERT data
-        let rowsByTable = this.extractInserts(queries, oidMap, schemas, columnMappings, debugLogger);
+        let rowsByTable: Map<string, Record<string, any>[]>;
+
+        if (Array.isArray(queriesOrRows)) {
+            // Extract INSERT data from queries
+            rowsByTable = await this.extractInserts(queriesOrRows, oidMap, schemas, columnMappings, debugLogger, pool);
+        } else {
+            // Use provided rows directly
+            rowsByTable = queriesOrRows;
+        }
 
         // Fetch missing dependencies from remote database
         if (pool) {
@@ -514,7 +602,14 @@ export class SeederGenerator {
             lines.push(`-- Table: ${tableName} (${rows.length} rows)`);
 
             const schema = schemas.find(s => s.tableName === tableName);
-            for (const row of rows) {
+
+            // Sort rows if table is self-referencing
+            let sortedRows = rows;
+            if (schema && selfReferencing.includes(tableName)) {
+                sortedRows = this.dependencyResolver.sortRows(tableName, rows, schema);
+            }
+
+            for (const row of sortedRows) {
                 lines.push(this.generateInsertStatement(tableName, row, schema));
             }
 
@@ -526,7 +621,7 @@ export class SeederGenerator {
 
         await fs.promises.writeFile(filePath, lines.join('\n'));
 
-        console.log(`[seed-it] Generated seeder: ${fileName} (${totalRows} rows)`);
+        log.info(`[seed-it] Generated seeder: ${fileName} (${totalRows} rows)`);
 
         return filePath;
     }
@@ -540,7 +635,7 @@ export class SeederGenerator {
         outputDir: string,
         oidMap?: Map<number, string>
     ): Promise<string[]> {
-        const rowsByTable = this.extractInserts(queries, oidMap, schemas);
+        const rowsByTable = await this.extractInserts(queries, oidMap, schemas);
         const deduplicated = this.deduplicator.deduplicateAll(rowsByTable, schemas);
         const { order } = this.dependencyResolver.resolveInsertionOrder(schemas);
 
@@ -571,7 +666,7 @@ export class SeederGenerator {
             files.push(filePath);
         }
 
-        console.log(`[seed-it] Generated ${files.length} seeder files`);
+        log.info(`[seed-it] Generated ${files.length} seeder files`);
 
         return files;
     }

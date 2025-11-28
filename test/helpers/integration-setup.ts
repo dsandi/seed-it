@@ -8,6 +8,7 @@ export interface IntegrationTestContext {
     schemas: TableSchema[];
     oidMap: Map<number, string>;
     analyzer: SchemaAnalyzer;
+    schemaName: string;
 }
 
 export async function setupIntegrationTest(): Promise<IntegrationTestContext> {
@@ -20,13 +21,12 @@ export async function setupIntegrationTest(): Promise<IntegrationTestContext> {
         password: 'test_password'
     });
 
-    // Drop all existing tables (CASCADE will handle dependencies)
-    await pool.query(`
-        DROP SCHEMA IF EXISTS public CASCADE;
-        CREATE SCHEMA public;
-        GRANT ALL ON SCHEMA public TO test_user;
-        GRANT ALL ON SCHEMA public TO public;
-    `);
+    // Generate unique schema name
+    const schemaName = `test_schema_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+    // Create schema and set search path
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+    await pool.query(`SET search_path TO ${schemaName}, public`);
 
     // Create schema
     const schema = createComprehensiveSchema();
@@ -41,16 +41,22 @@ export async function setupIntegrationTest(): Promise<IntegrationTestContext> {
         host: 'localhost',
         port: 5433,
         user: 'test_user',
-        password: 'test_password'
+        password: 'test_password',
+        schema: schemaName
     });
 
     const schemas = await analyzer.getAllSchemas();
     const oidMap = await analyzer.getTableOids();
 
-    return { pool, schemas, oidMap, analyzer };
+    return { pool, schemas, oidMap, analyzer, schemaName };
 }
 
 export async function teardownIntegrationTest(context: IntegrationTestContext): Promise<void> {
-    await context.analyzer.close();
-    await context.pool.end();
+    if (context.analyzer) {
+        await context.analyzer.close();
+    }
+    if (context.pool) {
+        await context.pool.query(`DROP SCHEMA IF EXISTS ${context.schemaName} CASCADE`);
+        await context.pool.end();
+    }
 }

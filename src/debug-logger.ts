@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { log } from './utils/logger';
 
 export class DebugLogger {
     private logData: any[] = [];
@@ -30,9 +31,9 @@ export class DebugLogger {
                 this.outputPath,
                 JSON.stringify(this.logData, null, 2)
             );
-            console.log(`[seed-it] Debug log saved to ${this.outputPath}`);
+            log.info(`[seed-it] Debug log saved to ${this.outputPath}`);
         } catch (e) {
-            console.error('[seed-it] Failed to save debug log:', e);
+            log.error('[seed-it] Failed to save debug log:', e);
         }
     }
 }

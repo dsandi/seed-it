@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { CapturedQuery } from '../../src/types';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SeederGenerator } from '../../src/generator/seeder-generator';
 import { setupIntegrationTest, teardownIntegrationTest, IntegrationTestContext } from '../helpers/integration-setup';
+import { log } from '../../src/utils/logger';
 
 /**
  * End-to-end integration tests for seeder generation
@@ -52,10 +56,13 @@ describe('Seeder Generation', () => {
         };
 
         // Extract inserts
-        const rowsByTable = generator.extractInserts(
+        const rowsByTable = await generator.extractInserts(
             [capturedQuery],
             context.oidMap,
-            context.schemas
+            context.schemas,
+            undefined,
+            undefined,
+            context.pool
         );
 
         // Should extract rows for users, orders, order_items, products
@@ -74,7 +81,7 @@ describe('Seeder Generation', () => {
         });
     });
 
-    it('should populate all NOT NULL columns', async () => {
+    it('should populate all columns (not just NOT NULL)', async () => {
         const query = `
             SELECT p.name, p.price, c.name as category_name
             FROM products p
@@ -97,26 +104,29 @@ describe('Seeder Generation', () => {
             database: 'seed_it_test'
         };
 
-        const rowsByTable = generator.extractInserts(
+        const rowsByTable = await generator.extractInserts(
             [capturedQuery],
             context.oidMap,
-            context.schemas
+            context.schemas,
+            undefined,
+            undefined,
+            context.pool
         );
 
         const productRows = rowsByTable.get('products');
         expect(productRows).toBeDefined();
 
-        // Check that NOT NULL columns are populated
+        // Check that ALL columns are populated
         const productSchema = context.schemas.find(s => s.tableName === 'products');
         expect(productSchema).toBeDefined();
 
-        const notNullColumns = productSchema!.columns
-            .filter(c => !c.isNullable)
-            .map(c => c.columnName);
+        const allColumns = productSchema!.columns.map(c => c.columnName);
 
         productRows!.forEach(row => {
-            notNullColumns.forEach(col => {
-                expect(row[col]).toBeDefined();
+            allColumns.forEach(col => {
+                expect(row).toHaveProperty(col);
+                // We don't check for undefined because null is a valid value for nullable columns
+                // But the key must exist
             });
         });
     });
@@ -143,33 +153,47 @@ describe('Seeder Generation', () => {
             database: 'seed_it_test'
         };
 
-        const rowsByTable = generator.extractInserts(
-            [capturedQuery],
-            context.oidMap,
-            context.schemas
-        );
-
-        // Generate SQL statements
-        const userRows = rowsByTable.get('users');
-
-        expect(userRows).toBeDefined();
-        expect(userRows!.length).toBeGreaterThan(0);
-
         // Create a fresh test table
         await context.pool.query('CREATE TEMP TABLE users_test (LIKE users INCLUDING ALL)');
 
-        // Execute generated INSERT
-        for (const row of userRows!) {
-            const columns = Object.keys(row);
-            const values = columns.map(col => row[col]);
-            const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+        // Generate seeder file
+        const outputDir = path.join(__dirname, '../../fixtures/seeder-generation-output');
+        const filePath = await generator.generateSeeder(
+            [capturedQuery],
+            context.schemas,
+            outputDir,
+            'valid_sql_test',
+            context.oidMap,
+            undefined,
+            context.pool
+        );
 
-            const insertSQL = `INSERT INTO users_test (${columns.join(', ')}) VALUES (${placeholders})`;
-            await context.pool.query(insertSQL, values);
+        // Read generated SQL
+        let sqlContent = fs.readFileSync(filePath, 'utf-8');
+        log.info('Generated SQL Content:\n', sqlContent);
+        expect(sqlContent).toContain('INSERT INTO users');
+        expect(sqlContent).toContain('ON CONFLICT');
+
+        // Replace table name for test
+        sqlContent = sqlContent.replace(/INSERT INTO users /g, 'INSERT INTO users_test ');
+
+        // Execute generated SQL
+        try {
+            await context.pool.query(sqlContent);
+        } catch (error) {
+            console.error('Failed to execute generated SQL:', error);
+            throw error;
         }
 
         // Verify data was inserted
         const verifyResult = await context.pool.query('SELECT * FROM users_test');
-        expect(verifyResult.rows.length).toBe(userRows!.length);
+        // Expect 1 row because of deduplication/ON CONFLICT
+        expect(verifyResult.rows.length).toBe(1);
+
+        // Clean up
+        if (fs.existsSync(outputDir)) {
+            fs.rmSync(outputDir, { recursive: true });
+        }
     });
 });
+

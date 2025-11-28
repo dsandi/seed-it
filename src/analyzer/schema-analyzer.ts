@@ -6,8 +6,10 @@ import { TableSchema, ColumnInfo, ForeignKeyInfo, IndexInfo, DatabaseConfig } fr
  */
 export class SchemaAnalyzer {
   private pool: Pool;
+  private schema: string;
 
   constructor(config: DatabaseConfig) {
+    this.schema = config.schema || 'public';
     this.pool = new Pool({
       host: config.host,
       port: config.port,
@@ -32,10 +34,10 @@ export class SchemaAnalyzer {
     const result = await this.pool.query(`
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = 'public'
+      WHERE table_schema = $1
         AND table_type = 'BASE TABLE'
       ORDER BY table_name
-    `);
+    `, [this.schema]);
 
     return result.rows.map(row => row.table_name);
   }
@@ -48,8 +50,8 @@ export class SchemaAnalyzer {
       SELECT oid, relname
       FROM pg_class
       WHERE relkind = 'r'
-        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
-    `);
+        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
+    `, [this.schema]);
 
     const map = new Map<number, string>();
     result.rows.forEach(row => {
@@ -65,10 +67,10 @@ export class SchemaAnalyzer {
     const result = await this.pool.query(`
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = 'public'
+      WHERE table_schema = $1
         AND table_type = 'VIEW'
       ORDER BY table_name
-    `);
+    `, [this.schema]);
 
     return result.rows.map(row => row.table_name);
   }
@@ -126,10 +128,10 @@ export class SchemaAnalyzer {
         numeric_precision,
         numeric_scale
       FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = $1
+      WHERE table_schema = $1
+        AND table_name = $2
       ORDER BY ordinal_position
-    `, [tableName]);
+    `, [this.schema, tableName]);
 
     return result.rows.map(row => ({
       columnName: row.column_name,
@@ -181,10 +183,10 @@ export class SchemaAnalyzer {
         ON rc.constraint_name = tc.constraint_name
         AND rc.constraint_schema = tc.table_schema
       WHERE tc.constraint_type = 'FOREIGN KEY'
-        AND tc.table_schema = 'public'
-        AND tc.table_name = $1
+        AND tc.table_schema = $1
+        AND tc.table_name = $2
       ORDER BY tc.constraint_name
-    `, [tableName]);
+    `, [this.schema, tableName]);
 
     return result.rows.map(row => ({
       constraintName: row.constraint_name,
@@ -212,10 +214,10 @@ export class SchemaAnalyzer {
       JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
       WHERE t.relkind = 'r'
         AND t.relname = $1
-        AND t.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+        AND t.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $2)
       GROUP BY i.relname, ix.indisunique, ix.indisprimary
       ORDER BY i.relname
-    `, [tableName]);
+    `, [tableName, this.schema]);
 
     return result.rows.map(row => ({
       indexName: row.index_name,

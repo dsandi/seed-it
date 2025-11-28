@@ -1,4 +1,5 @@
 import { TableSchema, DependencyGraph } from '../types';
+import { log } from '../utils/logger';
 
 /**
  * Dependency resolver that builds a dependency graph from foreign keys
@@ -83,8 +84,8 @@ export class DependencyResolver {
         // Check for circular dependencies
         if (sorted.length !== graph.nodes.size) {
             const remaining = Array.from(graph.nodes).filter(n => !sorted.includes(n));
-            console.warn(`[seed-it] Warning: Circular dependencies detected in tables: ${remaining.join(', ')}`);
-            console.warn('[seed-it] These tables will be added at the end. You may need to handle FK constraints manually.');
+            log.warn(`[seed-it] Warning: Circular dependencies detected in tables: ${remaining.join(', ')}`);
+            log.warn('[seed-it] These tables will be added at the end. You may need to handle FK constraints manually.');
 
             // Add remaining tables at the end
             sorted.push(...remaining);
@@ -161,5 +162,48 @@ export class DependencyResolver {
             circularDeps,
             selfReferencing,
         };
+    }
+    /**
+     * Sort rows of a table based on self-referencing foreign keys
+     */
+    sortRows(table: string, rows: any[], schema: TableSchema): any[] {
+        // Find self-referencing FKs
+        const selfFks = schema.foreignKeys.filter(fk => fk.referencedTable === table);
+        if (selfFks.length === 0) {
+            return rows;
+        }
+
+        // We assume simple hierarchy (one parent pointer) for now
+        // If multiple, it's more complex, but usually it's just one (e.g. parent_id)
+        const fk = selfFks[0];
+        const pk = schema.primaryKeys[0]; // Assume single PK for now
+
+        if (!pk) return rows;
+
+        const rowMap = new Map<any, any>();
+        rows.forEach(row => rowMap.set(row[pk], row));
+
+        const visited = new Set<any>();
+        const sorted: any[] = [];
+
+        const visit = (row: any) => {
+            const id = row[pk];
+            if (visited.has(id)) return;
+            visited.add(id);
+
+            const parentId = row[fk.columnName];
+            if (parentId !== null && parentId !== undefined) {
+                // If parent is in the dataset, visit it first
+                const parent = rowMap.get(parentId);
+                if (parent) {
+                    visit(parent);
+                }
+            }
+            sorted.push(row);
+        };
+
+        rows.forEach(row => visit(row));
+
+        return sorted;
     }
 }
