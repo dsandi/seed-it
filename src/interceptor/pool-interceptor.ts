@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Pool } from 'pg';
 import { CapturedQuery, CaptureConfig } from '../types';
+import { log } from '../utils/logger';
 
 /**
  * Pool interceptor that wraps pg.Pool.query() method
@@ -32,7 +33,7 @@ export class PoolInterceptor {
         } as any;
 
         if (this.config.verbose) {
-            console.log(`[seed-it] Intercepted pg.Pool for database: ${databaseName}`);
+            log.info(`[seed - it] Intercepted pg.Pool for database: ${databaseName} `);
         }
     }
 
@@ -92,7 +93,7 @@ export class PoolInterceptor {
                 this.capturedQueries.push(capturedQuery);
 
                 if (this.config.verbose) {
-                    console.log(`[seed-it] Captured: ${query.substring(0, 50)}...`);
+                    log.info(`[seed - it] Captured: ${query.substring(0, 50)}...`);
                 }
             }
         }
@@ -138,13 +139,13 @@ export class PoolInterceptor {
         const totalQueries = this.capturedQueries.length;
 
         if (totalQueries > CHUNK_SIZE) {
-            console.log(`[seed-it] Writing ${totalQueries} queries in chunks...`);
+            log.info(`[seed - it] Writing ${totalQueries} queries in chunks...`);
 
             // Write header
             await fs.promises.writeFile(outputPath, '{\n');
-            await fs.promises.appendFile(outputPath, `  "capturedAt": "${new Date().toISOString()}",\n`);
-            await fs.promises.appendFile(outputPath, `  "queryCount": ${totalQueries},\n`);
-            await fs.promises.appendFile(outputPath, `  "databases": ${JSON.stringify(this.config.databases)},\n`);
+            await fs.promises.appendFile(outputPath, `  "capturedAt": "${new Date().toISOString()}", \n`);
+            await fs.promises.appendFile(outputPath, `  "queryCount": ${totalQueries}, \n`);
+            await fs.promises.appendFile(outputPath, `  "databases": ${JSON.stringify(this.config.databases)}, \n`);
             await fs.promises.appendFile(outputPath, '  "queries": [\n');
 
             // Write queries in chunks
@@ -161,7 +162,7 @@ export class PoolInterceptor {
                 await fs.promises.appendFile(outputPath, chunkJson + '\n');
 
                 if ((i + CHUNK_SIZE) % 5000 === 0) {
-                    console.log(`[seed-it] Wrote ${Math.min(i + CHUNK_SIZE, totalQueries)}/${totalQueries} queries...`);
+                    log.info(`[seed - it] Wrote ${Math.min(i + CHUNK_SIZE, totalQueries)}/${totalQueries} queries...`);
                 }
             }
 
@@ -185,7 +186,7 @@ export class PoolInterceptor {
             );
         }
 
-        console.log(`[seed-it] Saved ${totalQueries} queries to ${outputPath}`);
+        log.info(`[seed-it] Saved ${totalQueries} queries to ${outputPath}`);
     }
 
     /**

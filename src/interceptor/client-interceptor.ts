@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Client } from 'pg';
 import { CapturedQuery, CaptureConfig } from '../types';
+import { log } from '../utils/logger';
 
 /**
  * Client interceptor that wraps pg.Client.query() method
@@ -30,7 +31,7 @@ export class ClientInterceptor {
         } as any;
 
         if (this.config.verbose) {
-            console.log(`[seed-it] Intercepted pg.Client for database: ${databaseName}`);
+            log.info(`[seed-it] Intercepted pg.Client for database: ${databaseName}`);
         }
     }
 
@@ -82,7 +83,7 @@ export class ClientInterceptor {
                 this.capturedQueries.push(capturedQuery);
 
                 if (this.config.verbose) {
-                    console.log(`[seed-it] Captured: ${query.substring(0, 50)}...`);
+                    log.info(`[seed-it] Captured query: ${query.substring(0, 50)}...`);
                 }
             }
         }
@@ -124,7 +125,7 @@ export class ClientInterceptor {
         const totalQueries = this.capturedQueries.length;
 
         if (totalQueries > CHUNK_SIZE) {
-            console.log(`[seed-it] Writing ${totalQueries} queries in chunks...`);
+            log.info(`[seed-it] Writing ${totalQueries} queries in chunks...`);
 
             // Write header
             await fs.promises.writeFile(outputPath, '{\n');
@@ -147,7 +148,7 @@ export class ClientInterceptor {
                 await fs.promises.appendFile(outputPath, chunkJson + '\n');
 
                 if ((i + CHUNK_SIZE) % 5000 === 0) {
-                    console.log(`[seed-it] Wrote ${Math.min(i + CHUNK_SIZE, totalQueries)}/${totalQueries} queries...`);
+                    log.info(`[seed-it] Wrote ${Math.min(i + CHUNK_SIZE, totalQueries)}/${totalQueries} queries...`);
                 }
             }
 
@@ -171,7 +172,7 @@ export class ClientInterceptor {
             );
         }
 
-        console.log(`[seed-it] Saved ${totalQueries} queries to ${outputPath}`);
+        log.info(`[seed-it] Saved ${totalQueries} queries to ${outputPath}`);
     }
 
     /**

@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { log } from '../utils/logger';
 import { TableSchema } from '../types';
 
 /**
@@ -182,9 +183,9 @@ export class MigrationGenerator {
 
         await fs.promises.writeFile(downFile, downLines.join('\n'));
 
-        console.log(`[seed-it] Generated migration: ${fileName}`);
+        log.info(`[seed-it] Generated migration: ${fileName}`);
         if (views.length > 0) {
-            console.log(`[seed-it] Included ${views.length} views`);
+            log.info(`[seed-it] Included ${views.length} views`);
         }
 
         return { upFile, downFile };

@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { log } from './utils/logger';
 import * as path from 'path';
 import chalk from 'chalk';
 import { CaptureConfig, GeneratorConfig } from './types';
@@ -23,7 +24,7 @@ export class Config {
             const fullPath = path.resolve(process.cwd(), p);
 
             if (fs.existsSync(fullPath)) {
-                console.log(chalk.gray(`[seed-it] Loading config from ${fullPath}`));
+                log.info(`[seed-it] Loading config from ${fullPath}`);
                 let config;
 
                 if (p.endsWith('.json')) {
@@ -33,7 +34,7 @@ export class Config {
                     try {
                         config = require(fullPath);
                     } catch (e: any) {
-                        console.error(chalk.red(`Error loading config file: ${e.message}`));
+                        log.error(chalk.red(`Error loading config file: ${e.message}`));
                         throw e;
                     }
                 }
@@ -46,7 +47,7 @@ export class Config {
             }
         }
 
-        console.log(chalk.yellow('[seed-it] No configuration file found in current directory.'));
+        log.warn(chalk.yellow('[seed-it] No configuration file found in current directory.'));
         return null;
     }
 

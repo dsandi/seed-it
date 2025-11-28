@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { log } from '../utils/logger';
 import { TableSchema } from '../types';
 
 interface FetchedRow {
@@ -24,7 +25,7 @@ export class DependencyFetcher {
         pool: Pool,
         debugLogger?: any
     ): Promise<Map<string, Record<string, any>[]>> {
-        console.log('[seed-it] Fetching missing dependencies from remote database...');
+        log.info('[seed-it] Fetching missing dependencies from remote database...');
 
         const result = new Map(rowsByTable);
         const toFetch: FetchedRow[] = [];
@@ -82,7 +83,7 @@ export class DependencyFetcher {
 
                         this.fetchCount++;
                         if (this.fetchCount % 10 === 0) {
-                            console.log(`[seed-it] Fetched ${this.fetchCount} dependency rows...`);
+                            log.info(`[seed-it] Fetched ${this.fetchCount} dependency rows...`);
                         }
 
                         if (debugLogger) {
@@ -106,7 +107,7 @@ export class DependencyFetcher {
             }
         }
 
-        console.log(`[seed-it] Fetched ${this.fetchCount} total dependency rows`);
+        log.info(`[seed-it] Fetched ${this.fetchCount} total dependency rows`);
         return result;
     }
 
@@ -121,7 +122,7 @@ export class DependencyFetcher {
             const result = await pool.query(query, [value]);
             return result.rows[0] || null;
         } catch (error: any) {
-            console.error(`[seed-it] Error fetching ${table}.${column} = ${value}:`, error.message);
+            log.error(`[seed-it] Failed to fetch dependency for ${table}.${column} = ${value}:`, error);
             return null;
         }
     }

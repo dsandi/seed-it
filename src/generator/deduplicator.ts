@@ -1,5 +1,6 @@
 import { SeederRow, TableSchema } from '../types';
 import * as crypto from 'crypto';
+import { log } from '../utils/logger';
 
 /**
  * Deduplicator that removes duplicate rows based on primary keys
@@ -59,18 +60,17 @@ export class Deduplicator {
             const schema = schemaMap.get(tableName);
 
             if (!schema) {
-                console.warn(`[seed-it] Warning: No schema found for table ${tableName}, skipping deduplication`);
+                log.warn(`[seed-it] Warning: No schema found for table ${tableName}, skipping deduplication`);
                 deduplicated.set(tableName, rows);
                 continue;
             }
 
+            const originalCount = rows.length;
             const uniqueRows = this.deduplicateTable(rows, schema);
             deduplicated.set(tableName, uniqueRows);
 
-            if (rows.length !== uniqueRows.length) {
-                console.log(
-                    `[seed-it] Deduplicated ${tableName}: ${rows.length} -> ${uniqueRows.length} rows`
-                );
+            if (originalCount !== uniqueRows.length) {
+                log.info(`[seed-it] Deduplicated ${tableName}: ${originalCount} -> ${uniqueRows.length} rows`);
             }
         }
 

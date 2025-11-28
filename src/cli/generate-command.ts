@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { SchemaAnalyzer } from '../analyzer/schema-analyzer';
 import { MigrationGenerator } from '../generator/migration-generator';
 import { SeederGenerator } from '../generator/seeder-generator';
+import { log } from '../utils/logger';
 import { Config } from '../config';
 import { DebugLogger } from '../debug-logger';
 
@@ -12,8 +13,8 @@ import { DebugLogger } from '../debug-logger';
  */
 export async function generateCommand(options: any) {
     try {
-        console.log(chalk.blue('[seed-it] Starting generation process...'));
-        console.log('');
+        log.info(chalk.blue('[seed-it] Starting generation process...'));
+        log.info('');
 
         // Load configuration
         const userConfig = await Config.load(options.config);
@@ -28,32 +29,32 @@ export async function generateCommand(options: any) {
 
         // Check if input file exists
         if (!fs.existsSync(inputFile)) {
-            console.error(chalk.red(`Error: Input file not found: ${inputFile}`));
-            console.log('');
-            console.log('Please run your tests with the interceptor enabled first.');
-            console.log('See: seed-it capture --help');
+            log.error(`Error: Input file not found: ${inputFile}`);
+            log.info('');
+            log.info('Please run your tests with the interceptor enabled first.');
+            log.info('See: seed-it capture --help');
             process.exit(1);
         }
 
         // Load captured data
-        console.log(chalk.gray(`Loading captured data from ${inputFile}...`));
+        log.info(chalk.gray(`Loading captured data from ${inputFile}...`));
         const capturedData = JSON.parse(fs.readFileSync(inputFile, 'utf-8'));
         const queries = capturedData.queries || [];
 
-        console.log(chalk.green(`✓ Loaded ${queries.length} queries`));
+        log.info(chalk.green(`✓ Loaded ${queries.length} queries`));
 
         // Extract unique databases from captured data
         const capturedDatabases = [...new Set(queries.map((q: any) => q.database))];
-        console.log(chalk.gray(`Found data from databases: ${capturedDatabases.join(', ')}`));
-        console.log('');
+        log.info(chalk.gray(`Found data from databases: ${capturedDatabases.join(', ')}`));
+        log.info('');
 
         // Get database connection configs
         let dbConfigs: any[] = [];
 
         // Check for common typo: database (singular) array instead of databases (plural)
         if (userConfig?.database && Array.isArray(userConfig.database) && !userConfig.databases) {
-            console.warn(chalk.yellow('⚠ Warning: Found "database" array in config. Did you mean "databases"?'));
-            console.warn(chalk.yellow('  Automatically using "database" array as "databases".'));
+            log.warn(chalk.yellow('⚠ Warning: Found "database" array in config. Did you mean "databases"?'));
+            log.warn(chalk.yellow('  Automatically using "database" array as "databases".'));
             userConfig.databases = userConfig.database;
         }
 
@@ -86,28 +87,28 @@ export async function generateCommand(options: any) {
         }
 
         if (dbConfigs.length === 0) {
-            console.error(chalk.red('Error: Database connection details required'));
-            console.log('');
-            console.log('Option 1: Use seed-it.config.js with databases array:');
-            console.log('  module.exports = {');
-            console.log('    databases: [');
-            console.log('      { name: "db1", host: "localhost", port: 5432, user: "user", password: "pass" },');
-            console.log('      { name: "db2", host: "localhost", port: 5432, user: "user", password: "pass" }');
-            console.log('    ]');
-            console.log('  };');
-            console.log('');
-            console.log('Option 2: Use CLI options:');
-            console.log('  --db-name <name> --db-user <user> --db-password <password>');
+            log.error(chalk.red('Error: Database connection details required'));
+            log.info('');
+            log.info('Option 1: Use seed-it.config.js with databases array:');
+            log.info('  module.exports = {');
+            log.info('    databases: [');
+            log.info('      { name: "db1", host: "localhost", port: 5432, user: "user", password: "pass" },');
+            log.info('      { name: "db2", host: "localhost", port: 5432, user: "user", password: "pass" }');
+            log.info('    ]');
+            log.info('  };');
+            log.info('');
+            log.info('Option 2: Use CLI options:');
+            log.info('  --db-name <name> --db-user <user> --db-password <password>');
             process.exit(1);
         }
 
         // Warn if multiple databases detected in captured data
         if (capturedDatabases.length > 1 && dbConfigs.length === 1) {
-            console.log(chalk.yellow('⚠ Multiple databases detected in captured data:'));
-            capturedDatabases.forEach(db => console.log(chalk.yellow(`  - ${db}`)));
-            console.log(chalk.yellow(`Using "${dbConfigs[0].database}" for schema introspection.`));
-            console.log(chalk.yellow('Note: All captured data will be included in seeders.'));
-            console.log('');
+            log.warn(chalk.yellow('⚠ Multiple databases detected in captured data:'));
+            capturedDatabases.forEach(db => log.warn(chalk.yellow(`  - ${db}`)));
+            log.warn(chalk.yellow(`Using "${dbConfigs[0].name}" for schema introspection.`));
+            log.warn(chalk.yellow('Note: All captured data will be included in seeders.'));
+            log.info('');
         }
 
         // Initialize debug logger
@@ -118,23 +119,23 @@ export async function generateCommand(options: any) {
             const dbConfig = dbConfigs[i];
             const dbName = dbConfig.name;  // Fixed: was dbConfig.database, should be dbConfig.name
 
-            console.log(chalk.cyan(`\n${'='.repeat(60)}`));
-            console.log(chalk.cyan(`Processing database: ${dbName} (${i + 1}/${dbConfigs.length})`));
-            console.log(chalk.cyan('='.repeat(60)));
-            console.log('');
+            log.info(chalk.cyan(`\n${'='.repeat(60)}`));
+            log.info(chalk.cyan(`Processing database: ${dbName} (${i + 1}/${dbConfigs.length})`));
+            log.info(chalk.cyan('='.repeat(60)));
+            log.info('');
 
             // Filter queries for this specific database
             const dbQueries = queries.filter((q: any) => q.database === dbName);
 
             if (dbQueries.length === 0) {
-                console.log(chalk.yellow(`⚠ No queries captured for database "${dbName}", skipping...`));
+                log.warn(chalk.yellow(`⚠ No queries captured for database "${dbName}", skipping...`));
                 continue;
             }
 
-            console.log(chalk.gray(`Found ${dbQueries.length} queries for ${dbName}`));
+            log.info(chalk.gray(`Found ${dbQueries.length} queries for ${dbName}`));
 
             // Analyze schema
-            console.log(chalk.gray('Analyzing database schema...'));
+            log.info(chalk.gray('Analyzing database schema...'));
             const analyzer = new SchemaAnalyzer(dbConfig);
             const schemas = await analyzer.getAllSchemas();
             const views = await analyzer.getViews().then(names =>
@@ -149,11 +150,11 @@ export async function generateCommand(options: any) {
 
             await analyzer.close();
 
-            console.log(chalk.green(`✓ Analyzed ${schemas.length} tables`));
+            log.info(chalk.green(`✓ Analyzed ${schemas.length} tables`));
             if (views.length > 0) {
-                console.log(chalk.green(`✓ Found ${views.length} views`));
+                log.info(chalk.green(`✓ Found ${views.length} views`));
             }
-            console.log('');
+            log.info('');
 
             // Generate migration (with database-specific subdirectory)
             const dbOutputDir = dbConfigs.length > 1
@@ -161,7 +162,7 @@ export async function generateCommand(options: any) {
                 : outputDir;
 
             const dbMigrationName = migrationName;
-            console.log(chalk.gray('Generating migration files...'));
+            log.info(chalk.gray('Generating migration files...'));
             const migrationGenerator = new MigrationGenerator();
             const { upFile, downFile } = await migrationGenerator.generateMigration(
                 schemas,
@@ -170,14 +171,14 @@ export async function generateCommand(options: any) {
                 dbMigrationName
             );
 
-            console.log(chalk.green(`✓ Generated migration:`));
-            console.log(chalk.gray(`  ${upFile}`));
-            console.log(chalk.gray(`  ${downFile}`));
-            console.log('');
+            log.info(chalk.green(`✓ Generated migration:`));
+            log.info(chalk.gray(`  ${upFile}`));
+            log.info(chalk.gray(`  ${downFile}`));
+            log.info('');
 
             // Generate seeder (with database-specific subdirectory)
             const dbSeederName = seederName;
-            console.log(chalk.gray('Generating seeder files...'));
+            log.info(chalk.gray('Generating seeder files...'));
             const seederGenerator = new SeederGenerator();
             const seederFile = await seederGenerator.generateSeeder(
                 dbQueries, // Use filtered queries for this database
@@ -190,23 +191,24 @@ export async function generateCommand(options: any) {
                 debugLogger
             );
 
-            console.log(chalk.green(`✓ Generated seeder:`));
-            console.log(chalk.gray(`  ${seederFile}`));
-            console.log('');
+            log.info(chalk.green(`✓ Generated seeder:`));
+            log.info(chalk.gray(`  ${seederFile}`));
+            log.info('');
         }
 
         await debugLogger.save();
-        console.log(chalk.green.bold('\n✨ Generation complete!'));
-        console.log('');
-        console.log(chalk.gray('Next steps:'));
-        console.log(chalk.gray('  1. Review generated files in ./seed-it-output/'));
-        console.log(chalk.gray('  2. Run migrations: psql -U user -d dbname -f migrations/*.up.sql'));
-        console.log(chalk.gray('  3. Run seeders: psql -U user -d dbname -f seeders/*.sql'));
+        log.info(chalk.green.bold('\n✨ Generation complete!'));
+        log.info('');
+        log.info(chalk.gray('Next steps:'));
+        log.info(chalk.gray('  1. Review generated files in ./seed-it-output/'));
+        log.info(chalk.gray('  2. Run migrations: psql -U user -d dbname -f migrations/*.up.sql'));
+        log.info(chalk.gray('  3. Run seeders: psql -U user -d dbname -f seeders/*.sql'));
     } catch (error: any) {
-        console.error(chalk.red('\nError:'), error.message);
+        log.error(chalk.red('\nError:'), error.message);
         if (error.stack) {
-            console.error(chalk.gray(error.stack));
+            log.error(chalk.gray(error.stack));
         }
         process.exit(1);
     }
 }
+

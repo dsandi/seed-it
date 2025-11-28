@@ -1,4 +1,5 @@
 import { PoolInterceptor } from './interceptor/pool-interceptor';
+import { log } from './utils/logger';
 import { ClientInterceptor } from './interceptor/client-interceptor';
 
 /**
@@ -42,8 +43,10 @@ class InterceptorRegistry {
     async saveAll(): Promise<void> {
         const allQueries = this.getAllQueries();
 
+
+
         if (this.interceptors.size === 0) {
-            console.warn('[seed-it] No interceptors registered');
+            log.warn('[seed-it] No interceptors registered');
             return;
         }
 
