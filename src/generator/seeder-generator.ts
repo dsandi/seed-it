@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Pool } from 'pg';
 import { CapturedQuery, TableSchema } from '../types';
 import { DependencyResolver } from './dependency-resolver';
 import { Deduplicator } from './deduplicator';
 import { AutoColumnMapper } from './auto-column-mapper';
+import { DependencyFetcher } from './dependency-fetcher';
 
 /**
  * Seeder generator that creates SQL INSERT statements from captured data
@@ -370,13 +372,29 @@ export class SeederGenerator {
     }
 
     /**
-     * Generate SQL INSERT statement for a row
+     * Generate INSERT statement for a row
      */
-    private generateInsert(tableName: string, row: Record<string, any>): string {
+    private generateInsertStatement(tableName: string, row: Record<string, any>, schema?: TableSchema): string {
         const columns = Object.keys(row);
-        const values = columns.map(col => this.formatValue(row[col]));
+        const values = columns.map(col => {
+            const val = row[col];
+            if (val === null || val === undefined) return 'NULL';
+            if (typeof val === 'string') return `'${val.replace(/'/g, "''")}'`;
+            if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+            if (Array.isArray(val)) return `ARRAY[${val.map(v => typeof v === 'string' ? `'${v.replace(/'/g, "''")}'` : this.formatValue(v)).join(', ')}]`;
+            if (val instanceof Date) return `'${val.toISOString()}'`;
+            if (typeof val === 'object') return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+            return String(val);
+        });
 
-        return `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${values.join(', ')});`;
+        // Add ON CONFLICT DO NOTHING with primary key
+        let conflictClause = '';
+        if (schema && schema.primaryKeys.length > 0) {
+            const pkColumns = schema.primaryKeys.join(', ');
+            conflictClause = ` ON CONFLICT (${pkColumns}) DO NOTHING`;
+        }
+
+        return `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${values.join(', ')})${conflictClause};`;
     }
 
     /**
@@ -418,12 +436,19 @@ export class SeederGenerator {
         seederName: string = 'initial_data',
         oidMap?: Map<number, string>,
         columnMappings?: Record<string, any>,
+        pool?: Pool,
         debugLogger?: any
     ): Promise<string> {
         // ...
 
         // Extract INSERT data
-        const rowsByTable = this.extractInserts(queries, oidMap, schemas, columnMappings, debugLogger);
+        let rowsByTable = this.extractInserts(queries, oidMap, schemas, columnMappings, debugLogger);
+
+        // Fetch missing dependencies from remote database
+        if (pool) {
+            const fetcher = new DependencyFetcher();
+            rowsByTable = await fetcher.fetchDependencies(rowsByTable, schemas, pool, debugLogger);
+        }
 
         if (debugLogger) {
             debugLogger.log('extracted_rows', {
@@ -485,8 +510,9 @@ export class SeederGenerator {
 
             lines.push(`-- Table: ${tableName} (${rows.length} rows)`);
 
+            const schema = schemas.find(s => s.tableName === tableName);
             for (const row of rows) {
-                lines.push(this.generateInsert(tableName, row));
+                lines.push(this.generateInsertStatement(tableName, row, schema));
             }
 
             lines.push('');
@@ -533,10 +559,9 @@ export class SeederGenerator {
             lines.push(`-- Seeder: ${tableName}`);
             lines.push(`-- Generated: ${new Date().toISOString()}`);
             lines.push(`-- Rows: ${rows.length}`);
-            lines.push('');
-
+            const schema = schemas.find(s => s.tableName === tableName);
             for (const row of rows) {
-                lines.push(this.generateInsert(tableName, row));
+                lines.push(this.generateInsertStatement(tableName, row, schema));
             }
 
             await fs.promises.writeFile(filePath, lines.join('\n'));

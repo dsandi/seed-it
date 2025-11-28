@@ -186,6 +186,7 @@ export async function generateCommand(options: any) {
                 dbSeederName,
                 oidMap,
                 config.columnMappings, // Pass column mappings from config
+                analyzer.getPool(), // Pass pool for dependency fetching
                 debugLogger
             );
 

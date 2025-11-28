@@ -103,7 +103,15 @@ This will:
 1. Read captured data from `./seed-it-output/captured-data.json`
 2. Connect to your remote database(s) to analyze schema
 3. **Automatically infer column mappings** from query structure
-4. Generate SQL files in `./seed-it-output/`
+4. **Automatically fetch missing dependencies** from remote database
+5. Generate SQL files in `./seed-it-output/`
+
+**Automatic Dependency Fetching:**
+- Detects missing foreign key references
+- Queries remote DB to fetch referenced rows
+- Recursively fetches dependencies (max depth: 10)
+- Ensures complete, self-contained seeders
+- Uses `ON CONFLICT DO NOTHING` to handle duplicates
 
 **Output Structure:**
 ```
@@ -170,6 +178,39 @@ INSERT INTO related_table (ref_id, main_table_id_fk) VALUES (102, 'test-rec-all'
 ```
 
 **No configuration required!**
+
+## Automatic Dependency Fetching
+
+seed-it automatically fetches missing dependencies from your remote database to ensure complete seeders.
+
+### How It Works
+
+When generating seeders, the tool:
+1. Checks each row's foreign key values
+2. If a referenced row is missing from captured data, queries the remote database
+3. Recursively fetches dependencies until complete
+
+### Example
+
+**Captured data:**
+```json
+{ "record_id": "test-123", "parent_id": 100 }
+```
+
+**Generator automatically:**
+1. Detects `parent_id` references `merchants.pk = 100`
+2. Queries: `SELECT * FROM merchants WHERE pk = 100`
+3. Fetches merchant row and its dependencies
+4. Generates complete seeder
+
+**Generated SQL:**
+```sql
+-- Dependencies fetched automatically
+INSERT INTO merchants (...) VALUES (...) ON CONFLICT (pk) DO NOTHING;
+INSERT INTO main_table (...) VALUES (...) ON CONFLICT (id) DO NOTHING;
+```
+
+The `ON CONFLICT DO NOTHING` clause ensures duplicate rows are safely ignored.
 
 ## API Reference
 

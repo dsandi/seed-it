@@ -1,5 +1,5 @@
 import { Pool, QueryResult } from 'pg';
-import { TableSchema, ColumnInfo, ForeignKeyInfo, IndexInfo } from '../types';
+import { TableSchema, ColumnInfo, ForeignKeyInfo, IndexInfo, DatabaseConfig } from '../types';
 
 /**
  * Schema analyzer that introspects PostgreSQL database structure
@@ -7,8 +7,22 @@ import { TableSchema, ColumnInfo, ForeignKeyInfo, IndexInfo } from '../types';
 export class SchemaAnalyzer {
   private pool: Pool;
 
-  constructor(connectionConfig: any) {
-    this.pool = new Pool(connectionConfig);
+  constructor(config: DatabaseConfig) {
+    this.pool = new Pool({
+      host: config.host,
+      port: config.port,
+      database: config.name,
+      user: config.user,
+      password: config.password,
+      ssl: config.ssl
+    });
+  }
+
+  /**
+   * Get the database pool for external use
+   */
+  public getPool(): Pool {
+    return this.pool;
   }
 
   /**
