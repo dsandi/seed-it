@@ -12,6 +12,9 @@
     "dev": "tsc --watch",
     "prepare": "npm run build",
     "test": "jest",
+    "test:unit": "jest test/unit",
+    "test:e2e": "test/scripts/test-db.sh start && jest test/e2e && test/scripts/test-db.sh stop",
+    "test:e2e:watch": "jest test/e2e --watch",
     "example": "node examples/basic-usage.js"
   },
   "keywords": [
