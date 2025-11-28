@@ -1,0 +1,64 @@
+{
+    "capturedAt": "2025-11-27T21:49:45.874Z",
+    "queryCount": 1,
+    "databases": [
+        "test_db"
+    ],
+    "queries": [
+        {
+            "query": "SELECT a.code,\n                 CASE\n                     WHEN a.flag_all\n                         THEN (SELECT array_agg(b.ref_id ORDER BY b.ref_id)\n                               FROM table_b b\n                               WHERE b.parent_id = a.parent_id)\n                     ELSE array_agg(DISTINCT ab.ref_id ORDER BY ab.ref_id)\n                     END AS ref_ids\n          FROM table_a a\n                   LEFT JOIN table_a_b ab ON ab.table_a_id = a.id\n          WHERE a.parent_id = $1\n            AND (a.flag_all = TRUE OR ab.ref_id = ANY ($2))\n          GROUP BY a.code, a.flag_all, a.parent_id;",
+            "params": [
+                100,
+                [
+                    1
+                ]
+            ],
+            "result": {
+                "command": "SELECT",
+                "rowCount": 2,
+                "oid": null,
+                "rows": [
+                    {
+                        "code": "rec-001",
+                        "ref_ids": [
+                            1
+                        ]
+                    },
+                    {
+                        "code": "rec-002",
+                        "ref_ids": [
+                            1,
+                            2,
+                            3,
+                            4,
+                            5
+                        ]
+                    }
+                ],
+                "fields": [
+                    {
+                        "name": "code",
+                        "tableID": 12345,
+                        "columnID": 2,
+                        "dataTypeID": 25,
+                        "dataTypeSize": -1,
+                        "dataTypeModifier": -1,
+                        "format": "text"
+                    },
+                    {
+                        "name": "item_ids",
+                        "tableID": 0,
+                        "columnID": 0,
+                        "dataTypeID": 1007,
+                        "dataTypeSize": -1,
+                        "dataTypeModifier": -1,
+                        "format": "text"
+                    }
+                ]
+            },
+            "timestamp": 1732752585563,
+            "database": "test_db",
+            "inTransaction": false
+        }
+    ]
+}

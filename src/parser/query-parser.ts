@@ -17,6 +17,15 @@ export interface SelectColumn {
     aggregateFunction?: string;  // e.g., "array_agg"
     aggregateColumn?: string;    // e.g., "ref_id"
     tableAlias?: string;         // e.g., "kcd"
+    // Support for CASE with multiple branches
+    caseAggregates?: Array<{
+        branch: 'THEN' | 'ELSE';
+        aggregateFunction: string;
+        aggregateColumn: string;
+        tableAlias?: string;
+        isSubquery: boolean;
+        subqueryTable?: string;  // For THEN subqueries
+    }>;
 }
 
 export interface TableReference {
@@ -77,25 +86,58 @@ export class QueryParser {
             const expression = aliasMatch ? aliasMatch[1].trim() : trimmed;
             const alias = aliasMatch ? aliasMatch[2] : undefined;
 
-            // Check for CASE statement containing aggregate
-            const caseAggMatch = expression.match(/CASE.+?(array_agg|count|sum|avg|min|max)\s*\((.+?)\)/is);
+            // Check for CASE statement containing aggregates
+            if (expression.match(/CASE/i)) {
+                const caseAggregates: Array<{
+                    branch: 'THEN' | 'ELSE';
+                    aggregateFunction: string;
+                    aggregateColumn: string;
+                    tableAlias?: string;
+                    isSubquery: boolean;
+                    subqueryTable?: string;
+                }> = [];
 
-            if (caseAggMatch) {
-                const func = caseAggMatch[1].toLowerCase();
-                const arg = caseAggMatch[2].trim();
+                // Parse THEN branch (may contain subquery with aggregate)
+                const thenMatch = expression.match(/THEN\s+\(?\s*SELECT\s+(array_agg|count|sum|avg|min|max)\s*\((?:DISTINCT\s+)?([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)/is);
+                if (thenMatch) {
+                    // Extract FROM clause from subquery to get table name
+                    const fromMatch = expression.match(/THEN[^E]*FROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)/is);
+                    caseAggregates.push({
+                        branch: 'THEN',
+                        aggregateFunction: thenMatch[1].toLowerCase(),
+                        aggregateColumn: thenMatch[3],
+                        tableAlias: thenMatch[2],
+                        isSubquery: true,
+                        subqueryTable: fromMatch ? fromMatch[1] : undefined
+                    });
+                }
 
-                // Extract table alias and column
-                const colMatch = arg.match(/([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)$/i);
+                // Parse ELSE branch (direct aggregate)
+                const elseMatch = expression.match(/ELSE\s+(array_agg|count|sum|avg|min|max)\s*\((?:DISTINCT\s+)?([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)/is);
+                if (elseMatch) {
+                    caseAggregates.push({
+                        branch: 'ELSE',
+                        aggregateFunction: elseMatch[1].toLowerCase(),
+                        aggregateColumn: elseMatch[3],
+                        tableAlias: elseMatch[2],
+                        isSubquery: false
+                    });
+                }
 
-                columns.push({
-                    expression,
-                    alias,
-                    isAggregate: true,
-                    aggregateFunction: func,
-                    aggregateColumn: colMatch ? colMatch[2] : arg,
-                    tableAlias: colMatch ? colMatch[1] : undefined
-                });
-                continue;
+                if (caseAggregates.length > 0) {
+                    // Use the first aggregate's info for backward compatibility
+                    const primary = caseAggregates[0];
+                    columns.push({
+                        expression,
+                        alias,
+                        isAggregate: true,
+                        aggregateFunction: primary.aggregateFunction,
+                        aggregateColumn: primary.aggregateColumn,
+                        tableAlias: primary.tableAlias,
+                        caseAggregates
+                    });
+                    continue;
+                }
             }
 
             // Check for aggregate function

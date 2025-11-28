@@ -258,7 +258,10 @@ export class SeederGenerator {
         for (const row of query.result.rows) {
             // Check each configured mapping
             for (const [resultColumn, mapping] of Object.entries(columnMappings)) {
-                const value = row[resultColumn];
+                // Handle CASE branch mappings (e.g., "ref_ids_THEN", "ref_ids_ELSE")
+                // Extract the base column name by removing _THEN or _ELSE suffix
+                const baseColumn = resultColumn.replace(/_(?:THEN|ELSE)$/, '');
+                const value = row[baseColumn];
 
                 if (value === undefined || value === null) {
                     continue;

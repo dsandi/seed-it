@@ -46,6 +46,52 @@ export class AutoColumnMapper {
                 continue;
             }
 
+            // Handle CASE statements with multiple branches
+            if (selectCol.caseAggregates && selectCol.caseAggregates.length > 0) {
+                for (const caseAgg of selectCol.caseAggregates) {
+                    let tableName: string | undefined;
+
+                    if (caseAgg.isSubquery && caseAgg.subqueryTable) {
+                        // THEN branch with subquery - use the subquery table directly
+                        tableName = caseAgg.subqueryTable;
+                    } else if (caseAgg.tableAlias) {
+                        // ELSE branch with direct aggregate - resolve alias to table name
+                        tableName = aliasMap.get(caseAgg.tableAlias);
+                    }
+
+                    if (tableName) {
+                        // Create a unique mapping key for this branch
+                        const mappingKey = `${field.name}_${caseAgg.branch}`;
+
+                        // For subqueries, we need to infer siblings from the WHERE clause
+                        const siblings: Record<string, string> = {};
+
+                        if (!caseAgg.isSubquery) {
+                            // For direct aggregates, infer siblings from JOIN
+                            const mapping = this.inferArrayAggMapping(
+                                { ...selectCol, tableAlias: caseAgg.tableAlias, aggregateColumn: caseAgg.aggregateColumn },
+                                parsed,
+                                aliasMap,
+                                schemas
+                            );
+                            if (mapping) {
+                                mappings[mappingKey] = mapping;
+                            }
+                        } else {
+                            // For subqueries, create a simpler mapping
+                            // We'll need to fetch the parent_id from the main table row
+                            mappings[mappingKey] = {
+                                table: tableName,
+                                column: caseAgg.aggregateColumn,
+                                type: 'array',
+                                siblings: {} // TODO: Extract from WHERE clause in subquery
+                            };
+                        }
+                    }
+                }
+                continue;
+            }
+
             // Handle array_agg specifically
             if (selectCol.aggregateFunction === 'array_agg' && selectCol.aggregateColumn) {
                 const mapping = this.inferArrayAggMapping(
