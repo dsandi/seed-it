@@ -69,10 +69,37 @@ export class QueryParser {
     }
 
     private parseSelectColumns(query: string): SelectColumn[] {
-        const selectMatch = query.match(/SELECT\s+(.+?)\s+FROM/i);
-        if (!selectMatch) return [];
+        // Find SELECT keyword
+        const selectIndex = query.search(/SELECT\s+/i);
+        if (selectIndex === -1) return [];
 
-        const columnsStr = selectMatch[1];
+        // Find the main FROM clause (not one inside a subquery)
+        // We need to track parentheses depth to avoid matching FROM inside subqueries
+        let fromIndex = -1;
+        let depth = 0;
+        const fromRegex = /FROM\s+/gi;
+        let match;
+
+        while ((match = fromRegex.exec(query)) !== null) {
+            // Count parentheses between SELECT and this FROM
+            const textBetween = query.substring(selectIndex, match.index);
+            depth = 0;
+            for (const char of textBetween) {
+                if (char === '(') depth++;
+                else if (char === ')') depth--;
+            }
+
+            // If we're at depth 0, this is the main FROM
+            if (depth === 0) {
+                fromIndex = match.index;
+                break;
+            }
+        }
+
+        if (fromIndex === -1) return [];
+
+        // Extract columns string between SELECT and FROM
+        const columnsStr = query.substring(selectIndex + 6, fromIndex).trim(); // +6 for "SELECT"
         const columns: SelectColumn[] = [];
 
         // Split by comma, but respect parentheses
@@ -101,7 +128,9 @@ export class QueryParser {
                 const thenMatch = expression.match(/THEN\s+\(?\s*SELECT\s+(array_agg|count|sum|avg|min|max)\s*\((?:DISTINCT\s+)?([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)/is);
                 if (thenMatch) {
                     // Extract FROM clause from subquery to get table name
-                    const fromMatch = expression.match(/THEN[^E]*FROM\s+([a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)/is);
+                    // Look for FROM between THEN and ELSE (or END if no ELSE)
+                    const thenSection = expression.match(/THEN\s+\([^)]*\)/is)?.[0] || expression.match(/THEN\s+.*?(?=ELSE|END)/is)?.[0] || '';
+                    const fromMatch = thenSection.match(/FROM\s+([a-z_][a-z0-9_]*)(?:\s+([a-z_][a-z0-9_]*))?/i);
                     caseAggregates.push({
                         branch: 'THEN',
                         aggregateFunction: thenMatch[1].toLowerCase(),
@@ -227,16 +256,29 @@ export class QueryParser {
     private splitByComma(str: string): string[] {
         const parts: string[] = [];
         let current = '';
-        let depth = 0;
+        let parenDepth = 0;
+        let caseDepth = 0;
 
         for (let i = 0; i < str.length; i++) {
             const char = str[i];
+            const remaining = str.substring(i);
+
+            // Check for CASE keyword (start of CASE expression)
+            if (remaining.match(/^CASE\s/i)) {
+                caseDepth++;
+            }
+
+            // Check for END keyword (end of CASE expression)
+            // Make sure it's not part of another word like "APPEND"
+            if (remaining.match(/^END(?:\s|$|,)/i) && caseDepth > 0) {
+                caseDepth--;
+            }
 
             if (char === '(') {
-                depth++;
+                parenDepth++;
             } else if (char === ')') {
-                depth--;
-            } else if (char === ',' && depth === 0) {
+                parenDepth--;
+            } else if (char === ',' && parenDepth === 0 && caseDepth === 0) {
                 parts.push(current);
                 current = '';
                 continue;
