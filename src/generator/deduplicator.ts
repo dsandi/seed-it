@@ -10,8 +10,11 @@ export class Deduplicator {
      * Generate a hash for a row based on primary key columns
      */
     private hashRow(row: Record<string, any>, pkColumns: string[]): string {
-        // If no PK columns, use all columns
-        const keyColumns = pkColumns.length > 0 ? pkColumns : Object.keys(row).sort();
+        // Check if all PK columns are present in the row
+        const hasAllPk = pkColumns.length > 0 && pkColumns.every(col => row[col] !== undefined && row[col] !== null);
+
+        // If no PK columns OR missing PK values, use all columns
+        const keyColumns = hasAllPk ? pkColumns : Object.keys(row).sort();
 
         const keyValues = keyColumns.map(col => {
             const value = row[col];

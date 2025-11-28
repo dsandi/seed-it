@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { setupE2EContext, teardownE2EContext, runE2EScenario, E2ETestContext } from '../helpers/e2e-helper';
 import { Pool } from 'pg';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * E2E tests for Complex Query Resolution
@@ -41,14 +43,14 @@ describe('Complex Query Resolution E2E', () => {
                         CREATE TABLE IF NOT EXISTS tags (
                             tag_id SERIAL PRIMARY KEY,
                             name TEXT NOT NULL,
-                            group_id_fk INTEGER
+                            group_id_fk INTEGER REFERENCES groups(group_id)
                         )
                     `);
 
                     await pool.query(`
                         CREATE TABLE IF NOT EXISTS widgets (
                             widget_id TEXT PRIMARY KEY,
-                            group_id_fk INTEGER,
+                            group_id_fk INTEGER REFERENCES groups(group_id),
                             all_tags BOOLEAN DEFAULT FALSE
                         )
                     `);
@@ -113,9 +115,9 @@ describe('Complex Query Resolution E2E', () => {
             verifyExtractedRows: (rowsByTable: Map<string, any[]>) => {
                 // Check if GROUPS are inserted (The missing dependency)
                 const groups = rowsByTable.get('groups');
-                // expect(groups).toBeDefined(); // This might fail now
-                // expect(groups?.length).toBeGreaterThan(0);
-                // expect(groups?.some(r => r.group_id === 100)).toBe(true);
+                expect(groups).toBeDefined();
+                expect(groups?.length).toBeGreaterThan(0);
+                expect(groups?.some(r => r.group_id === 100)).toBe(true);
 
                 // Check if WIDGETS are inserted
                 const widgets = rowsByTable.get('widgets');
@@ -132,30 +134,28 @@ describe('Complex Query Resolution E2E', () => {
 
         // Additional verification on Target DB
         // We expect GROUPS to be present
-        // const groupsResult = await context.targetPool.query('SELECT * FROM groups WHERE group_id = 100');
-        // expect(groupsResult.rows.length).toBe(1);
-        // expect(groupsResult.rows[0].name).toBe('Main Group');
+        const groupsResult = await context.targetPool.query('SELECT * FROM groups WHERE group_id = 100');
+        expect(groupsResult.rows.length).toBe(1);
+        expect(groupsResult.rows[0].name).toBe('Main Group');
 
         // We expect Widget 1 to be present
         const widgetResult = await context.targetPool.query("SELECT * FROM widgets WHERE widget_id = 'widget-1'");
         expect(widgetResult.rows.length).toBe(1);
 
         // Verify the generated SQL file content matches the design expectations
-        const fs = require('fs');
-        const path = require('path');
         const outputDir = path.join(context.outputDir, 'seeders');
         const files = fs.readdirSync(outputDir);
         const seederFile = files.find((f: string) => f.endsWith('.sql'));
         expect(seederFile).toBeDefined();
 
-        const sqlContent = fs.readFileSync(path.join(outputDir, seederFile), 'utf-8');
+        const sqlContent = fs.readFileSync(path.join(outputDir, seederFile!), 'utf-8');
 
         // Check for expected INSERT statements as defined in complex_query_design.md
         // We verify the EXACT generated SQL statements
 
         // 1. Groups
-        // const expectedGroupInsert = "INSERT INTO groups (group_id, name) VALUES (100, 'Main Group') ON CONFLICT (group_id) DO NOTHING;";
-        // expect(sqlContent).toContain(expectedGroupInsert);
+        const expectedGroupInsert = "INSERT INTO groups (group_id, name) VALUES (100, 'Main Group') ON CONFLICT (group_id) DO NOTHING;";
+        expect(sqlContent).toContain(expectedGroupInsert);
 
         // 2. Widgets
         const expectedWidgetA = "INSERT INTO widgets (widget_id, group_id_fk, all_tags) VALUES ('widget-1', 100, FALSE) ON CONFLICT (widget_id) DO NOTHING;";
@@ -164,6 +164,7 @@ describe('Complex Query Resolution E2E', () => {
         // 3. Tags (Now expected to work with mapping)
         expect(sqlContent).toContain("INSERT INTO tags");
         expect(sqlContent).toContain("VALUES (200, 'Tag A', 100)");
+
         expect(sqlContent).toContain("VALUES (204, 'Tag E', 100)");
 
         // 4. Widget Tags
