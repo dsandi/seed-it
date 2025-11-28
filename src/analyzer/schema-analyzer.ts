@@ -32,11 +32,12 @@ export class SchemaAnalyzer {
    */
   async getTables(): Promise<string[]> {
     const result = await this.pool.query(`
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = $1
-        AND table_type = 'BASE TABLE'
-      ORDER BY table_name
+      SELECT c.relname as table_name
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1
+        AND c.relkind = 'r'
+      ORDER BY c.relname
     `, [this.schema]);
 
     return result.rows.map(row => row.table_name);
@@ -65,11 +66,12 @@ export class SchemaAnalyzer {
    */
   async getViews(): Promise<string[]> {
     const result = await this.pool.query(`
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = $1
-        AND table_type = 'VIEW'
-      ORDER BY table_name
+      SELECT c.relname as table_name
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1
+        AND c.relkind = 'v'
+      ORDER BY c.relname
     `, [this.schema]);
 
     return result.rows.map(row => row.table_name);
