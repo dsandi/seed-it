@@ -11,11 +11,11 @@ export interface ParsedQuery {
 }
 
 export interface SelectColumn {
-    expression: string;      // Full expression (e.g., "array_agg(kcd.ref_id)")
+    expression: string;      // Full expression (e.g., "array_agg(kcd.category_pk_fk)")
     alias?: string;          // AS alias (e.g., "categories")
     isAggregate: boolean;
     aggregateFunction?: string;  // e.g., "array_agg"
-    aggregateColumn?: string;    // e.g., "ref_id"
+    aggregateColumn?: string;    // e.g., "category_pk_fk"
     tableAlias?: string;         // e.g., "kcd"
     // Support for CASE with multiple branches
     caseAggregates?: Array<{
@@ -40,7 +40,7 @@ export interface JoinClause {
 }
 
 export interface JoinCondition {
-    leftColumn: string;     // e.g., "kcd.main_table_id_fk"
+    leftColumn: string;     // e.g., "kcd.kds_displays_id_fk"
     rightColumn: string;    // e.g., "kd.id"
     leftTable?: string;
     rightTable?: string;

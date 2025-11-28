@@ -142,7 +142,7 @@ export class AutoColumnMapper {
         const siblings: Record<string, string> = {};
 
         // The JOIN condition tells us how tables are related
-        // e.g., kcd.main_table_id_fk = kd.id
+        // e.g., kcd.kds_displays_id_fk = kd.id
         // We need to find which column in the main SELECT maps to the FK
         const mainTableAlias = parsed.fromTable.alias || parsed.fromTable.tableName;
 
