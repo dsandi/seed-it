@@ -48,9 +48,9 @@ export class SchemaAnalyzer {
   async getTableOids(): Promise<Map<number, string>> {
     const result = await this.pool.query(`
       SELECT oid, relname
-      FROM pg_class
+      FROM pg_catalog.pg_class
       WHERE relkind = 'r'
-        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)
+        AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = $1)
     `, [this.schema]);
 
     const map = new Map<number, string>();
@@ -150,12 +150,15 @@ export class SchemaAnalyzer {
   private async getPrimaryKeys(tableName: string): Promise<string[]> {
     const result = await this.pool.query(`
       SELECT a.attname
-      FROM pg_index i
-      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-      WHERE i.indrelid = $1::regclass
+      FROM pg_catalog.pg_index i
+      JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
+      JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+      JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE t.relname = $1
+        AND n.nspname = $2
         AND i.indisprimary
       ORDER BY a.attnum
-    `, [tableName]);
+    `, [tableName, this.schema]);
 
     return result.rows.map(row => row.attname);
   }
@@ -208,13 +211,13 @@ export class SchemaAnalyzer {
         array_agg(a.attname::text ORDER BY a.attnum) AS columns,
         ix.indisunique AS is_unique,
         ix.indisprimary AS is_primary
-      FROM pg_class t
-      JOIN pg_index ix ON t.oid = ix.indrelid
-      JOIN pg_class i ON i.oid = ix.indexrelid
-      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+      FROM pg_catalog.pg_class t
+      JOIN pg_catalog.pg_index ix ON t.oid = ix.indrelid
+      JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid
+      JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
       WHERE t.relkind = 'r'
         AND t.relname = $1
-        AND t.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $2)
+        AND t.relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = $2)
       GROUP BY i.relname, ix.indisunique, ix.indisprimary
       ORDER BY i.relname
     `, [tableName, this.schema]);

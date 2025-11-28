@@ -14,14 +14,17 @@ export interface E2ETestContext {
     oidMap: Map<number, string>;
     outputDir: string;
     schemaName: string;
+    dbConfig: any;
 }
 
 export interface E2ETestScenario {
     name: string;
-    setupData: (pool: Pool) => Promise<void>;
+    setupData: (source: Pool, target: Pool) => Promise<void>;
     query: string;
     params: any[];
     expectedSeederFile?: string;
+    verifyExtractedRows?: (rowsByTable: Map<string, any[]>) => void;
+    skipVerification?: boolean;
 }
 
 /**
@@ -41,12 +44,20 @@ export async function runE2EScenario(
     // Step 1: Setup data in source DB
     log.info('Step 1: Setting up test data in source DB...');
     try {
-        await scenario.setupData(context.sourcePool);
+        await scenario.setupData(context.sourcePool, context.targetPool);
         log.info('✓ Test data setup complete');
     } catch (error) {
         log.error('✗ Failed to setup test data:', error);
         throw error;
     }
+
+    // Refresh schemas as setupData might have created new tables
+    log.info('Refreshing schema definitions...');
+    const analyzer = new SchemaAnalyzer(context.dbConfig);
+    context.schemas = await analyzer.getAllSchemas();
+    context.oidMap = await analyzer.getTableOids();
+    await analyzer.close();
+    log.info(`✓ Schema refreshed. Found ${context.schemas.length} tables.`);
 
     // Step 2: Capture query execution
     log.info('\nStep 2: Executing query and capturing results...');
@@ -99,6 +110,11 @@ export async function runE2EScenario(
         throw error;
     }
 
+    if (scenario.verifyExtractedRows) {
+        log.info('Running custom verification on extracted rows...');
+        scenario.verifyExtractedRows(rowsByTable);
+    }
+
     // Step 4: Apply seeders to target DB
     log.info('\nStep 4: Applying seeders to target DB...');
 
@@ -136,6 +152,11 @@ export async function runE2EScenario(
     }
 
     // Step 5: Verify query works on target with same results
+    if (scenario.skipVerification) {
+        log.info('Skipping verification step as requested.');
+        return;
+    }
+
     log.info('\nStep 5: Verifying query works on target DB...');
     let targetResult;
     try {
@@ -225,15 +246,17 @@ export async function setupE2EContext(testName: string): Promise<E2ETestContext>
     await sourcePool.query(schema);
     await targetPool.query(schema);
 
-    // Analyze source schema
-    const analyzer = new SchemaAnalyzer({
+    const dbConfig = {
         name: 'seed_it_test',
         host: 'localhost',
         port: 5433,
         user: 'test_user',
         password: 'test_password',
         schema: schemaName
-    });
+    };
+
+    // Analyze source schema
+    const analyzer = new SchemaAnalyzer(dbConfig);
 
     const schemas = await analyzer.getAllSchemas();
     const oidMap = await analyzer.getTableOids();
@@ -251,7 +274,8 @@ export async function setupE2EContext(testName: string): Promise<E2ETestContext>
         schemas,
         oidMap,
         outputDir,
-        schemaName
+        schemaName,
+        dbConfig
     };
 }
 
