@@ -62,7 +62,7 @@ export async function generateCommand(options: any) {
             dbConfigs = userConfig.databases.map((db: any) => ({
                 host: db.host || 'localhost',
                 port: db.port || 5432,
-                database: db.name,
+                name: db.name,  // Fixed: was 'database', should be 'name' to match DatabaseConfig type
                 user: db.user,
                 password: db.password,
                 ssl: db.ssl
@@ -74,13 +74,13 @@ export async function generateCommand(options: any) {
             const singleDb = {
                 host: options.dbHost || userConfig?.database?.host || 'localhost',
                 port: parseInt(options.dbPort || userConfig?.database?.port || '5432'),
-                database: options.dbName || userConfig?.database?.name,
+                name: options.dbName || userConfig?.database?.name,  // Fixed: was 'database', should be 'name'
                 user: options.dbUser || userConfig?.database?.user,
                 password: options.dbPassword || userConfig?.database?.password,
                 ssl: userConfig?.database?.ssl,
             };
 
-            if (singleDb.database && singleDb.user) {
+            if (singleDb.name && singleDb.user) {  // Fixed: was 'singleDb.database', should be 'singleDb.name'
                 dbConfigs = [singleDb];
             }
         }
