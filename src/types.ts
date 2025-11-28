@@ -97,6 +97,7 @@ export interface ColumnMapping {
     column: string;                         // Target column name
     type?: 'scalar' | 'array';             // How to handle the value (default: scalar)
     siblings?: Record<string, string>;      // Map other result columns to table columns
+    parentLookups?: Record<string, string>; // Map table columns to parent table columns (deferred resolution)
 }
 
 export interface GeneratorConfig {

@@ -194,6 +194,7 @@ export class AutoColumnMapper {
 
         // Extract sibling mapping from JOIN condition
         const siblings: Record<string, string> = {};
+        const parentLookups: Record<string, string> = {};
 
         // The JOIN condition tells us how tables are related
         // e.g., kcd.kds_displays_id_fk = kd.id
@@ -212,19 +213,33 @@ export class AutoColumnMapper {
             referencedColumn = join.condition.leftColumn.split('.')[1];
         }
 
-        if (!fkColumn || !referencedColumn) {
-            return null;
-        }
+        if (fkColumn && referencedColumn) {
+            // Find the SELECT column that corresponds to the referenced column
+            let foundSibling = false;
+            for (const col of parsed.selectColumns) {
+                if (!col.isAggregate) {
+                    // Check if this column matches the referenced column
+                    const colMatch = col.expression.match(/([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)$/i);
+                    if (colMatch && colMatch[2] === referencedColumn) {
+                        const resultColumnName = col.alias || col.expression.split('.').pop() || '';
+                        siblings[resultColumnName] = fkColumn;
+                        foundSibling = true;
+                        break;
+                    }
+                }
+            }
 
-        // Find the SELECT column that corresponds to the referenced column
-        for (const col of parsed.selectColumns) {
-            if (!col.isAggregate) {
-                // Check if this column matches the referenced column
-                const colMatch = col.expression.match(/([a-z_][a-z0-9_]*)\s*\.\s*([a-z_][a-z0-9_]*)$/i);
-                if (colMatch && colMatch[2] === referencedColumn) {
-                    const resultColumnName = col.alias || col.expression.split('.').pop() || '';
-                    siblings[resultColumnName] = fkColumn;
-                    break;
+            // If sibling not found in SELECT, check if it's a join with the main table
+            // If so, we can look it up from the parent row later (deferred resolution)
+            if (!foundSibling) {
+                // Check if the referenced column belongs to the main table
+                const isMainTable = (join.condition.leftTable === mainTableAlias && join.condition.leftColumn.endsWith(`.${referencedColumn}`)) ||
+                    (join.condition.rightTable === mainTableAlias && join.condition.rightColumn.endsWith(`.${referencedColumn}`));
+
+                if (isMainTable) {
+                    // We can lookup this column from the parent table row
+                    // Mapping: target_table_column -> parent_table_column
+                    parentLookups[fkColumn] = referencedColumn;
                 }
             }
         }
@@ -233,7 +248,8 @@ export class AutoColumnMapper {
             table: tableName,
             column,
             type: 'array',
-            siblings
+            siblings,
+            parentLookups: Object.keys(parentLookups).length > 0 ? parentLookups : undefined
         };
     }
 

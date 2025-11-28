@@ -145,6 +145,27 @@ export class SeederGenerator {
                 }
             }
 
+            // 4. Process column mappings (e.g. array unrolling)
+            // Combine manual mappings with auto-inferred mappings
+            let effectiveMappings = columnMappings || {};
+
+            // Auto-infer mappings if we have schema info
+            if (schemas) {
+                const inferredMappings = this.autoMapper.inferMappings(query, schemas, oidMap);
+                if (Object.keys(inferredMappings).length > 0) {
+                    log.debug(`[seed-it] Inferred mappings for query:`, Object.keys(inferredMappings));
+                    effectiveMappings = { ...inferredMappings, ...effectiveMappings };
+                }
+            }
+
+            if (Object.keys(effectiveMappings).length > 0) {
+                const mappedRows = this.processColumnMappings(query, effectiveMappings);
+                for (const [table, rows] of mappedRows.entries()) {
+                    if (!extractedForQuery.has(table)) extractedForQuery.set(table, []);
+                    extractedForQuery.get(table)!.push(...rows);
+                }
+            }
+
             // Merge into main results
             if (extractedForQuery.size > 0) {
                 for (const [table, rows] of extractedForQuery.entries()) {
@@ -315,6 +336,78 @@ export class SeederGenerator {
                 }
             }
         }
+
+        // After enrichment, resolve deferred lookups
+        this.resolveDeferredLookups(rowsByTable, schemas);
+    }
+
+    /**
+     * Resolve deferred lookups (e.g. filling in FKs from parent rows)
+     */
+    private resolveDeferredLookups(
+        rowsByTable: Map<string, Record<string, any>[]>,
+        schemas: TableSchema[]
+    ): void {
+        for (const [table, rows] of rowsByTable.entries()) {
+            for (const row of rows) {
+                if (row['__parentLookups'] && row['__parentData']) {
+                    const lookups = row['__parentLookups'] as Record<string, string>;
+                    const parentData = row['__parentData'] as Record<string, any>;
+
+                    // We need to find the parent table. 
+                    // Since we don't explicitly know WHICH table is the parent from the mapping alone (it just says "parent"),
+                    // we have to search for a table that has a row matching 'parentData'.
+                    // Optimization: The AutoColumnMapper could tell us the parent table name.
+                    // For now, let's try to match against ALL other tables (heuristic).
+                    // Or better: we know the parent table from the query structure usually.
+
+                    // Let's iterate all other tables and try to find a matching enriched row
+                    for (const [parentTable, parentRows] of rowsByTable.entries()) {
+                        if (parentTable === table) continue;
+
+                        // Find a row in parentTable that matches parentData on common keys (e.g. device_identifier)
+                        // This is fuzzy, but effective for 1:1 or N:1 relationships in the same query result
+                        const match = parentRows.find(pRow => {
+                            // Check if pRow contains all keys from parentData that are NOT null/undefined
+                            // and match the values.
+                            // Note: parentData is the RAW result row. pRow is the ENRICHED row.
+                            // pRow should be a superset of the relevant parts of parentData.
+
+                            // Heuristic: Match on Unique Keys or just overlap
+                            let matchCount = 0;
+                            let mismatch = false;
+
+                            for (const [key, val] of Object.entries(parentData)) {
+                                if (val !== undefined && val !== null && pRow[key] !== undefined) {
+                                    if (String(pRow[key]) === String(val)) {
+                                        matchCount++;
+                                    } else {
+                                        mismatch = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            return !mismatch && matchCount > 0;
+                        });
+
+                        if (match) {
+                            // Found the parent row! Perform lookups
+                            for (const [childCol, parentCol] of Object.entries(lookups)) {
+                                if (match[parentCol] !== undefined) {
+                                    row[childCol] = match[parentCol];
+                                    // log.debug(`[seed-it] Resolved deferred lookup: ${table}.${childCol} -> ${match[parentCol]} (from ${parentTable}.${parentCol})`);
+                                }
+                            }
+                            break; // Stop looking after finding a match
+                        }
+                    }
+
+                    // Cleanup internal metadata
+                    delete row['__parentLookups'];
+                    delete row['__parentData'];
+                }
+            }
+        }
     }
 
     /**
@@ -346,6 +439,7 @@ export class SeederGenerator {
                 const column = mapping.column;
                 const type = mapping.type || 'scalar';
                 const siblings = mapping.siblings || {};
+                const parentLookups = mapping.parentLookups || {};
 
                 if (!rowsByTable.has(table)) {
                     rowsByTable.set(table, []);
@@ -366,6 +460,23 @@ export class SeederGenerator {
                             }
                         }
 
+                        // Add parent lookup metadata (special key starting with __)
+                        if (Object.keys(parentLookups).length > 0) {
+                            newRow['__parentLookups'] = parentLookups;
+                            // Also store reference to parent row index/id if possible, 
+                            // but for now we rely on the fact that we are processing a specific query result row
+                            // We need to link this newRow to the parent row (which is 'row' here, but 'row' is a raw result row)
+                            // The parent row in 'rowsByTable' will be created/enriched separately.
+                            // We need a way to link them.
+                            // Strategy: Store the raw result row signature or similar?
+                            // Simpler: We can't easily link to the *enriched* parent row yet because it doesn't exist.
+                            // BUT, we can store the raw values we HAVE (like device_identifier) and use them to find the parent later?
+                            // Or, we can do the lookup *during* enrichment if we pass the parent rows?
+
+                            // Let's store the raw parent data we have for matching
+                            newRow['__parentData'] = { ...row };
+                        }
+
                         rowsByTable.get(table)!.push(newRow);
                     }
                 } else {
@@ -380,6 +491,11 @@ export class SeederGenerator {
                         if (siblingValue !== undefined) {
                             newRow[String(siblingTableCol)] = siblingValue;
                         }
+                    }
+
+                    if (Object.keys(parentLookups).length > 0) {
+                        newRow['__parentLookups'] = parentLookups;
+                        newRow['__parentData'] = { ...row };
                     }
 
                     rowsByTable.get(table)!.push(newRow);

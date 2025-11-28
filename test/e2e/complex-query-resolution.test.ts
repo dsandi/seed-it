@@ -120,6 +120,12 @@ describe('Complex Query Resolution E2E', () => {
                 expect(devices).toBeDefined();
                 expect(devices?.some(r => r.device_identifier === 'device-A')).toBe(true);
                 expect(devices?.some(r => r.device_identifier === 'device-B')).toBe(true);
+
+                // Check if ITEM_CATEGORIES are inserted
+                const categories = rowsByTable.get('item_categories');
+                expect(categories).toBeDefined();
+                expect(categories?.length).toBeGreaterThan(0);
+                expect(categories?.some(r => r.category_id === 200)).toBe(true);
             },
             skipVerification: true
         });
@@ -134,7 +140,40 @@ describe('Complex Query Resolution E2E', () => {
         const deviceBResult = await context.targetPool.query("SELECT * FROM devices WHERE device_identifier = 'device-B'");
         expect(deviceBResult.rows.length).toBe(1);
 
-        // Note: Device A might be missing if device_category_mappings are not seeded (known limitation for now)
-        // and item_categories might be missing if not fetched as dependencies.
+        // Verify the generated SQL file content matches the design expectations
+        const fs = require('fs');
+        const path = require('path');
+        const outputDir = path.join(context.outputDir, 'seeders');
+        const files = fs.readdirSync(outputDir);
+        const seederFile = files.find((f: string) => f.endsWith('.sql'));
+        expect(seederFile).toBeDefined();
+
+        const sqlContent = fs.readFileSync(path.join(outputDir, seederFile), 'utf-8');
+
+        // Check for expected INSERT statements as defined in complex_query_design.md
+        // We verify the EXACT generated SQL statements
+
+        // 1. Menus
+        const expectedMenuInsert = "INSERT INTO menus (menu_id, name) VALUES (100, 'Main Menu') ON CONFLICT (menu_id) DO NOTHING;";
+        expect(sqlContent).toContain(expectedMenuInsert);
+
+        // 2. Devices
+        // Note: Column order depends on extraction/enrichment, but based on previous runs:
+        const expectedDeviceA = "INSERT INTO devices (device_identifier, menu_id_fk, id, show_all_categories) VALUES ('device-A', 100, 1, FALSE) ON CONFLICT (id) DO NOTHING;";
+        const expectedDeviceB = "INSERT INTO devices (device_identifier, menu_id_fk, id, show_all_categories) VALUES ('device-B', 100, 2, TRUE) ON CONFLICT (id) DO NOTHING;";
+
+        expect(sqlContent).toContain(expectedDeviceA);
+        expect(sqlContent).toContain(expectedDeviceB);
+
+        // 3. Item Categories (Now expected to work with mapping)
+        // Note: The order of columns in INSERT might vary, so we check for presence of values
+        expect(sqlContent).toContain("INSERT INTO item_categories");
+        expect(sqlContent).toContain("VALUES (200, 'Food', 100)");
+        expect(sqlContent).toContain("VALUES (201, 'Beverages', 100)");
+
+        // 4. Device Category Mappings
+        // These might be missing if we can't link them without d.id
+        // But we are working on a fix for that!
+        // expect(sqlContent).toContain("INSERT INTO device_category_mappings");
     });
 });

@@ -25,6 +25,7 @@ export interface E2ETestScenario {
     expectedSeederFile?: string;
     verifyExtractedRows?: (rowsByTable: Map<string, any[]>) => void;
     skipVerification?: boolean;
+    columnMappings?: Record<string, any>;
 }
 
 /**
@@ -96,7 +97,7 @@ export async function runE2EScenario(
             capturedQueries,
             undefined,
             context.schemas,
-            undefined, // columnMappings
+            scenario.columnMappings, // Pass columnMappings from scenario
             undefined, // debugLogger
             context.sourcePool
         );
@@ -108,6 +109,20 @@ export async function runE2EScenario(
     } catch (error) {
         log.error('✗ Seeder generation failed:', error);
         throw error;
+    }
+
+    // Generate SQL file for verification/inspection
+    try {
+        await generator.generateSeeder(
+            rowsByTable,
+            context.schemas,
+            context.outputDir,
+            scenario.name
+        );
+        log.info(`✓ Generated seeder file in ${context.outputDir}/seeders`);
+    } catch (error) {
+        log.error('✗ Failed to write seeder file:', error);
+        // Don't fail the test just because file writing failed, but log it
     }
 
     if (scenario.verifyExtractedRows) {
