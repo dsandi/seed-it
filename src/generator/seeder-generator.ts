@@ -334,9 +334,19 @@ export class SeederGenerator {
 
                     if (availableColumns.length > 0) {
                         const conditions = availableColumns.map((col, idx) => `${col} = $${idx + 1}`).join(' AND ');
-                        fetchQuery = `SELECT * FROM ${table} WHERE ${conditions} LIMIT 1`;
+                        fetchQuery = `SELECT * FROM ${table} WHERE ${conditions}`;
                         fetchValues = availableColumns.map(col => row[col]);
-                        log.warn(`[seed-it] ⚠ Using heuristic lookup for ${table} using columns: ${availableColumns.join(', ')}`);
+
+                        // Check if this is a join table with composite keys (multiple FKs, no PK)
+                        const isJoinTable = schema.primaryKeys.length === 0 && schema.foreignKeys.length >= 2;
+                        const usingPartialKey = isJoinTable && availableColumns.length < schema.foreignKeys.length;
+
+                        if (usingPartialKey) {
+                            log.warn(`[seed-it] ⚠ Using partial composite key for ${table} (${availableColumns.join(', ')})`);
+                            log.warn(`[seed-it]   This may match multiple rows. Consider including all FK columns in your query.`);
+                        } else {
+                            log.warn(`[seed-it] ⚠ Using heuristic lookup for ${table} using columns: ${availableColumns.join(', ')}`);
+                        }
                     }
                 }
 
@@ -344,13 +354,20 @@ export class SeederGenerator {
                     try {
                         // log.debug(`[seed-it] Fetching complete row for ${table} with values:`, fetchValues);
                         const result = await pool.query(fetchQuery, fetchValues);
-                        if (result.rows.length > 0) {
-                            // Merge complete row with existing data (preserving any calculated fields if they exist)
+
+                        if (result.rows.length > 1) {
+                            // Multiple rows match - this is ambiguous, skip enrichment
+                            log.warn(`[seed-it] ⚠ Multiple rows (${result.rows.length}) match partial key for ${table}`);
+                            log.warn(`[seed-it]   Keys: ${fetchValues.join(', ')}`);
+                            log.warn(`[seed-it]   Skipping enrichment. Row will be seeded with partial data.`);
+                            log.warn(`[seed-it]   Fix: Add more columns to your query or use explicit column mappings.`);
+                        } else if (result.rows.length === 1) {
+                            // Exactly one match - use it
                             rows[i] = { ...row, ...result.rows[0] };
                             // log.debug(`[seed-it] ✓ Fetched complete row for ${table}`);
                         } else {
-                            // Warn if we couldn't find the row (this explains incomplete seeders)
-                            log.warn(`[seed-it] ⚠ Could not find complete row for ${table} using keys:`, fetchValues);
+                            // No matches - warn about missing data
+                            log.warn(`[seed-it] ⚠ Could not find complete row for ${table} using keys: ${fetchValues.join(', ')}`);
                             log.warn(`[seed-it]   Query: ${fetchQuery}`);
                             log.warn(`[seed-it]   This row will be seeded with partial data (IDs only).`);
                         }
