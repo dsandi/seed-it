@@ -119,7 +119,7 @@ export async function generateCommand(options: any) {
             const dbConfig = dbConfigs[i];
             const dbName = dbConfig.name;  // Fixed: was dbConfig.database, should be dbConfig.name
 
-            log.info(chalk.cyan(`\n${'='.repeat(60)}`));
+            log.info(chalk.cyan(`${'='.repeat(60)}`));
             log.info(chalk.cyan(`Processing database: ${dbName} (${i + 1}/${dbConfigs.length})`));
             log.info(chalk.cyan('='.repeat(60)));
             log.info('');

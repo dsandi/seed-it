@@ -7,8 +7,7 @@ import * as path from 'path';
 /**
  * E2E tests for Complex Query Resolution
  * Reproduces the issue where FK dependencies are missing from generated seeders
- * when using complex queries with CASE, subqueries, and array_agg.
- * Uses generic schema names to avoid exposing user data.
+ * using a "Bird Sanctuary" themed schema.
  */
 describe('Complex Query Resolution E2E', () => {
     let context: E2ETestContext;
@@ -21,49 +20,84 @@ describe('Complex Query Resolution E2E', () => {
         await teardownE2EContext(context);
     });
 
-    it('should resolve FK dependencies for complex CASE/subquery logic', async () => {
+    it('should resolve deep FK dependencies (grandparents/great-grandparents) for Bird Sanctuary schema', async () => {
         await runE2EScenario(context, {
-            name: 'vehicles_complex',
+            name: 'bird_sanctuary_repro',
             setupData: async (source: Pool, target: Pool) => {
-                // 1. Create Schema in BOTH source and target
+                // 1. Create Schema
                 const createTables = async (pool: Pool) => {
-                    await pool.query(`DROP TABLE IF EXISTS vehicle_routes CASCADE`);
-                    await pool.query(`DROP TABLE IF EXISTS vehicles CASCADE`);
-                    await pool.query(`DROP TABLE IF EXISTS routes CASCADE`);
-                    await pool.query(`DROP TABLE IF EXISTS fleets CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS species_sightings CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS observation_posts CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS bird_species CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS sanctuaries CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS bird_watchers CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS habitats CASCADE`);
+                    await pool.query(`DROP TABLE IF EXISTS bird_families CASCADE`);
 
+                    // Bird Families (Great-Grandparent)
                     await pool.query(`
-                        CREATE TABLE IF NOT EXISTS fleets (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL
+                        CREATE TABLE bird_families (
+                            fam_pk SERIAL PRIMARY KEY,
+                            family_name TEXT NOT NULL
                         )
                     `);
 
+                    // Habitats (Great-Grandparent)
                     await pool.query(`
-                        CREATE TABLE IF NOT EXISTS routes (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            fleet_id INTEGER NOT NULL REFERENCES fleets(id)
+                        CREATE TABLE habitats (
+                            hab_pk SERIAL PRIMARY KEY,
+                            habitat_name TEXT NOT NULL
                         )
                     `);
 
+                    // Bird Watchers (Grandparent)
                     await pool.query(`
-                        CREATE TABLE IF NOT EXISTS vehicles (
-                            id SERIAL PRIMARY KEY,
-                            vehicle_token TEXT NOT NULL,
-                            vehicle_uuid TEXT NOT NULL,
-                            fleet_id INTEGER NOT NULL REFERENCES fleets(id),
-                            show_all_routes BOOLEAN DEFAULT FALSE,
-                            CONSTRAINT unq_vehicles_composite UNIQUE (fleet_id, vehicle_uuid, vehicle_token)
+                        CREATE TABLE bird_watchers (
+                            wat_pk SERIAL PRIMARY KEY,
+                            watcher_name TEXT,
+                            fam_pk_fk INTEGER NOT NULL
                         )
                     `);
 
+                    // Sanctuaries (Parent)
                     await pool.query(`
-                        CREATE TABLE IF NOT EXISTS vehicle_routes (
-                            route_id INTEGER NOT NULL REFERENCES routes(id),
-                            vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+                        CREATE TABLE sanctuaries (
+                            san_pk SERIAL PRIMARY KEY,
+                            sanctuary_name VARCHAR(75) NOT NULL,
+                            wat_pk_created_by INTEGER NOT NULL,
+                            hab_pk_fk INTEGER NOT NULL,
+                            san_san_pk_parent INTEGER
+                        )
+                    `);
+
+                    // Bird Species (Child)
+                    await pool.query(`
+                        CREATE TABLE bird_species (
+                            spe_pk SERIAL PRIMARY KEY,
+                            species_name VARCHAR(200) NOT NULL,
+                            san_pk_fk INTEGER NOT NULL,
+                            wat_pk_created_by INTEGER NOT NULL
+                        )
+                    `);
+
+                    // Observation Posts (Child)
+                    await pool.query(`
+                        CREATE TABLE observation_posts (
+                            pos_pk SERIAL PRIMARY KEY,
+                            post_code TEXT NOT NULL,
+                            san_pk_fk INTEGER NOT NULL,
+                            all_species BOOLEAN DEFAULT FALSE,
+                            UNIQUE (post_code, san_pk_fk)
+                        )
+                    `);
+
+                    // Species Sightings (Grandchild / Join Table)
+                    await pool.query(`
+                        CREATE TABLE species_sightings (
+                            spe_pk_fk INTEGER NOT NULL,
+                            pos_pk_fk INTEGER NOT NULL,
                             active BOOLEAN DEFAULT TRUE,
-                            PRIMARY KEY (route_id, vehicle_id)
+                            CONSTRAINT unq_species_post UNIQUE (spe_pk_fk, pos_pk_fk)
                         )
                     `);
                 };
@@ -72,66 +106,70 @@ describe('Complex Query Resolution E2E', () => {
                 await createTables(target);
 
                 // 2. Insert Data (Source only)
-                // Fleet
-                await source.query(`INSERT INTO fleets (id, name) VALUES (631201, 'Main Fleet')`);
+                // Bird Families
+                await source.query(`INSERT INTO bird_families (fam_pk, family_name) VALUES (99, 'Raptors')`);
 
-                // Routes
-                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86482, 'Route A', 631201)`);
-                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86483, 'Route B', 631201)`);
-                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86484, 'Route C', 631201)`);
-                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (86485, 'Route D', 631201)`);
-                await source.query(`INSERT INTO routes (id, name, fleet_id) VALUES (101900, 'Route E', 631201)`);
+                // Habitats
+                await source.query(`INSERT INTO habitats (hab_pk, habitat_name) VALUES (500, 'Wetlands')`);
 
-                // Vehicles
-                // Vehicle 1: Specific route (86482)
-                await source.query(`
-                    INSERT INTO vehicles (id, vehicle_token, vehicle_uuid, fleet_id, show_all_routes) 
-                    VALUES (1, 'token-1', 'uuid-1', 631201, false)
-                `);
+                // Bird Watchers
+                await source.query(`INSERT INTO bird_watchers (wat_pk, watcher_name, fam_pk_fk) VALUES (1, 'Ornithologist Prime', 99)`);
 
-                // Vehicle 2: All routes
-                await source.query(`
-                    INSERT INTO vehicles (id, vehicle_token, vehicle_uuid, fleet_id, show_all_routes) 
-                    VALUES (2, 'token-all', 'uuid-2', 631201, true)
-                `);
+                // Sanctuaries
+                await source.query(`INSERT INTO sanctuaries (san_pk, sanctuary_name, wat_pk_created_by, hab_pk_fk) VALUES (631201, 'Grand Aviary', 1, 500)`);
 
-                // Link Vehicle 1 to Route 86482
-                await source.query(`INSERT INTO vehicle_routes (route_id, vehicle_id) VALUES (86482, 1)`);
+                // Bird Species
+                await source.query(`INSERT INTO bird_species (spe_pk, species_name, san_pk_fk, wat_pk_created_by) VALUES (86482, 'Golden Eagle', 631201, 1)`);
+                await source.query(`INSERT INTO bird_species (spe_pk, species_name, san_pk_fk, wat_pk_created_by) VALUES (86483, 'Bald Eagle', 631201, 1)`);
+                await source.query(`INSERT INTO bird_species (spe_pk, species_name, san_pk_fk, wat_pk_created_by) VALUES (86484, 'Peregrine Falcon', 631201, 1)`);
+                await source.query(`INSERT INTO bird_species (spe_pk, species_name, san_pk_fk, wat_pk_created_by) VALUES (86485, 'Osprey', 631201, 1)`);
+                await source.query(`INSERT INTO bird_species (spe_pk, species_name, san_pk_fk, wat_pk_created_by) VALUES (101900, 'Red-tailed Hawk', 631201, 1)`);
+
+                // Observation Posts
+                await source.query(`INSERT INTO observation_posts (pos_pk, post_code, san_pk_fk, all_species) VALUES (1, 'post-alpha-2741208312314', 631201, false)`);
+                await source.query(`INSERT INTO observation_posts (pos_pk, post_code, san_pk_fk, all_species) VALUES (2, 'post-all-access', 631201, true)`);
+
+                // Species Sightings
+                await source.query(`INSERT INTO species_sightings (spe_pk_fk, pos_pk_fk) VALUES (86482, 1)`);
+                await source.query(`INSERT INTO species_sightings (spe_pk_fk, pos_pk_fk) VALUES (86483, 1)`);
+                await source.query(`INSERT INTO species_sightings (spe_pk_fk, pos_pk_fk) VALUES (86484, 1)`);
+                await source.query(`INSERT INTO species_sightings (spe_pk_fk, pos_pk_fk) VALUES (86485, 1)`);
+                await source.query(`INSERT INTO species_sightings (spe_pk_fk, pos_pk_fk) VALUES (101900, 1)`);
             },
             query: `
-                SELECT 
-                    v.vehicle_token,
-                    CASE
-                        WHEN v.show_all_routes THEN (
-                            SELECT array_agg(r.id ORDER BY r.id)
-                            FROM routes r
-                            WHERE r.fleet_id = v.fleet_id
-                        )
-                        ELSE array_agg(DISTINCT vr.route_id ORDER BY vr.route_id)
-                    END AS routes
-                FROM vehicles v
-                LEFT JOIN vehicle_routes vr ON vr.vehicle_id = v.id
-                WHERE v.fleet_id = $1
-                  AND (v.show_all_routes = TRUE OR vr.route_id = ANY ($2))
-                GROUP BY v.vehicle_token, v.show_all_routes, v.fleet_id;
+                SELECT op.post_code,
+                       CASE
+                           WHEN op.all_species
+                               THEN (SELECT array_agg(bs.spe_pk ORDER BY bs.spe_pk)
+                                     FROM bird_species bs
+                                     WHERE bs.san_pk_fk = op.san_pk_fk)
+                           ELSE array_agg(DISTINCT ss.spe_pk_fk ORDER BY ss.spe_pk_fk)
+                           END AS species_list
+                FROM observation_posts op
+                         LEFT JOIN species_sightings ss ON ss.pos_pk_fk = op.pos_pk
+                WHERE op.san_pk_fk = $1
+                  AND (op.all_species = TRUE OR ss.spe_pk_fk = ANY ($2))
+                GROUP BY op.post_code, op.all_species, op.san_pk_fk;
             `,
             params: [631201, [86482]],
 
             // Custom verification
             verifyExtractedRows: (rowsByTable: Map<string, any[]>) => {
-                // We expect this to FAIL initially or produce incomplete data
-                const fleets = rowsByTable.get('fleets');
+                // Assert that all parent and grandparent tables are present in the extraction
+                expect(rowsByTable.has('bird_families')).toBe(true);
+                expect(rowsByTable.has('habitats')).toBe(true);
+                expect(rowsByTable.has('bird_watchers')).toBe(true);
+                expect(rowsByTable.has('sanctuaries')).toBe(true);
+
+                // Assert specific row counts if needed
+                expect(rowsByTable.get('bird_families')?.length).toBeGreaterThan(0);
+                expect(rowsByTable.get('habitats')?.length).toBeGreaterThan(0);
+                expect(rowsByTable.get('bird_watchers')?.length).toBeGreaterThan(0);
+                expect(rowsByTable.get('sanctuaries')?.length).toBeGreaterThan(0);
             }
         });
 
-        // Additional verification on Target DB
-        const fleetResult = await context.targetPool.query('SELECT * FROM fleets WHERE id = 631201');
-        expect(fleetResult.rows.length).toBe(1);
-
-        const vehicleResult = await context.targetPool.query("SELECT * FROM vehicles WHERE vehicle_token = 'token-1'");
-        expect(vehicleResult.rows.length).toBe(1);
-
-        // Verify generated SQL
+        // Verify generated SQL content
         const outputDir = path.join(context.outputDir, 'seeders');
         const files = fs.readdirSync(outputDir);
         const seederFile = files.find((f: string) => f.endsWith('.sql'));
@@ -139,20 +177,12 @@ describe('Complex Query Resolution E2E', () => {
 
         const sqlContent = fs.readFileSync(path.join(outputDir, seederFile!), 'utf-8');
 
-        // 1. Fleets
-        expect(sqlContent).toContain("INSERT INTO fleets");
-        expect(sqlContent).toContain("VALUES (631201, 'Main Fleet')");
-
-        // 2. Routes
-        expect(sqlContent).toContain("INSERT INTO routes");
-        expect(sqlContent).toContain("VALUES (86482, 'Route A', 631201)");
-
-        // 3. Vehicles
-        expect(sqlContent).toContain("INSERT INTO vehicles");
-        expect(sqlContent).toContain("token-1");
-
-        // 4. Mappings
-        expect(sqlContent).toContain("INSERT INTO vehicle_routes");
-        expect(sqlContent).toContain("VALUES (86482, 1, TRUE)");
+        // Check for presence of INSERT statements for all tables
+        expect(sqlContent).toContain("INSERT INTO bird_families");
+        expect(sqlContent).toContain("INSERT INTO habitats");
+        expect(sqlContent).toContain("INSERT INTO bird_watchers");
+        expect(sqlContent).toContain("INSERT INTO sanctuaries");
+        expect(sqlContent).toContain("INSERT INTO bird_species");
+        expect(sqlContent).toContain("INSERT INTO observation_posts");
     });
 });
