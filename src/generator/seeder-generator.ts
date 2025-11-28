@@ -329,6 +329,11 @@ export class SeederGenerator {
                             // Merge complete row with existing data (preserving any calculated fields if they exist)
                             rows[i] = { ...row, ...result.rows[0] };
                             // log.debug(`[seed-it] ✓ Fetched complete row for ${table}`);
+                        } else {
+                            // Warn if we couldn't find the row (this explains incomplete seeders)
+                            log.warn(`[seed-it] ⚠ Could not find complete row for ${table} using keys:`, fetchValues);
+                            log.warn(`[seed-it]   Query: ${fetchQuery}`);
+                            log.warn(`[seed-it]   This row will be seeded with partial data (IDs only).`);
                         }
                     } catch (error: any) {
                         log.debug(`[seed-it] ✗ Error fetching complete row for ${table}:`, error.message);

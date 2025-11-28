@@ -4,17 +4,14 @@ import winston from 'winston';
 export const logger = winston.createLogger({
     level: process.env.DEBUG === 'true' || process.env.DEBUG === '1' ? 'debug' : 'info',
     format: winston.format.combine(
-        winston.format.timestamp(),
         winston.format.colorize(),
-        winston.format.printf(({ level, message, timestamp, ...meta }) => {
+        winston.format.printf(({ level, message, ...meta }) => {
             const metaStr = Object.keys(meta).length ? JSON.stringify(meta, null, 2) : '';
-            return `${timestamp} [${level}]: ${message} ${metaStr}`;
+            return `[${level}]: ${message} ${metaStr}`;
         })
     ),
     transports: [
-        new winston.transports.Console({
-            format: winston.format.simple()
-        })
+        new winston.transports.Console()
     ]
 });
 
