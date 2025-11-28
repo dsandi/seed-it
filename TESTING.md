@@ -5,7 +5,7 @@
 ```
 test/
 ├── unit/      # Parser and logic tests (no database)
-├── e2e/       # All database tests (pg-mem + Docker PostgreSQL)
+├── e2e/       # End-to-end tests with Docker PostgreSQL
 ├── helpers/   # Shared test utilities
 └── scripts/   # Test management scripts
 ```
@@ -16,30 +16,21 @@ test/
 - Run: `npm run test:unit`
 
 ### E2E Tests (`test/e2e/`)
-Contains two types of tests:
-
-**Quick Tests (pg-mem)**
-- Files: `case-subquery-integration.test.ts`, `comprehensive-queries.test.ts`, `param-extraction.test.ts`, `traffic-capture.test.ts`
-- Fast in-memory PostgreSQL for quick feedback
-- Some limitations (no LATERAL, json_build_object)
-- Good for development
-
-**Full Tests (Docker PostgreSQL)**
-- Files: `lateral-joins.test.ts`, `json-functions.test.ts`, `seeder-generation.test.ts`, `complex-scenarios.test.ts`
-- Complete PostgreSQL feature support
-- Tests full seed-it workflow
-- Requires Docker
+- Test complete seed-it workflow with Docker PostgreSQL
+- Uses two databases: source (remote simulation) and target (local simulation)
+- Tests: capture query → generate seeders → apply to target → verify results match
+- Run: `npm run test:e2e`
 
 ## Running Tests
 
 ```bash
-# All tests (requires Docker for full E2E)
+# All tests (requires Docker for E2E)
 npm test
 
-# Unit tests only (fastest, no Docker)
+# Unit tests only (fast, no Docker)
 npm run test:unit
 
-# All E2E tests (starts/stops Docker automatically)
+# E2E tests (starts/stops Docker automatically)
 npm run test:e2e
 
 # Watch mode (start Docker first)
@@ -82,3 +73,43 @@ E2E tests use **two databases** to simulate the real workflow:
 - Database: seed_it_test_target
 - User: test_user
 - Password: test_password
+
+## Writing E2E Tests
+
+Use the `e2e-helper` to write simple, focused tests:
+
+```typescript
+import { setupE2EContext, teardownE2EContext, runE2EScenario } from '../helpers/e2e-helper';
+
+describe('My Feature E2E', () => {
+    let context;
+
+    beforeAll(async () => {
+        context = await setupE2EContext('my-feature');
+    });
+
+    afterAll(async () => {
+        await teardownE2EContext(context);
+    });
+
+    it('should test my scenario', async () => {
+        await runE2EScenario(context, {
+            name: 'my_scenario',
+            setupData: async (pool) => {
+                // Insert test data
+                await pool.query(`INSERT INTO users ...`);
+            },
+            query: `SELECT ... FROM users WHERE id = $1`,
+            params: [1]
+        });
+    });
+});
+```
+
+The helper automatically:
+1. Sets up data in source DB
+2. Executes query and captures results
+3. Generates seeders
+4. Applies seeders to target DB
+5. Verifies query returns same results
+6. Logs detailed information at each step
