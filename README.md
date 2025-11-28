@@ -158,22 +158,22 @@ seed-it automatically handles calculated fields (e.g., `array_agg`, `CASE` state
 
 Your query:
 ```sql
-SELECT kd.record_id, array_agg(kcd.ref_id) AS categories
-FROM main_table kd
-LEFT JOIN related_table kcd ON kcd.main_table_id_fk = kd.id
-GROUP BY kd.record_id
+SELECT d.record_id, array_agg(dr.ref_id) AS references
+FROM main_table d
+LEFT JOIN related_table dr ON dr.main_id = d.id
+GROUP BY d.record_id
 ```
 
 seed-it automatically:
-1. Detects `categories` is `array_agg(kcd.ref_id)`
+1. Detects `references` is `array_agg(dr.ref_id)`
 2. Parses the JOIN to find `related_table` table
-3. Extracts the foreign key relationship from `ON kcd.main_table_id_fk = kd.id`
+3. Extracts the foreign key relationship from `ON dr.main_id = d.id`
 4. Generates correct INSERTs:
 
 ```sql
-INSERT INTO related_table (ref_id, main_table_id_fk) VALUES (101, 'test-rec-2741208312314');
-INSERT INTO related_table (ref_id, main_table_id_fk) VALUES (101, 'test-rec-all');
-INSERT INTO related_table (ref_id, main_table_id_fk) VALUES (102, 'test-rec-all');
+INSERT INTO related_table (ref_id, main_id) VALUES (101, 'record-001');
+INSERT INTO related_table (ref_id, main_id) VALUES (101, 'record-002');
+INSERT INTO related_table (ref_id, main_id) VALUES (102, 'record-002');
 -- etc.
 ```
 
@@ -198,15 +198,15 @@ When generating seeders, the tool:
 ```
 
 **Generator automatically:**
-1. Detects `parent_id` references `merchants.pk = 100`
-2. Queries: `SELECT * FROM merchants WHERE pk = 100`
-3. Fetches merchant row and its dependencies
+1. Detects `parent_id` references `parent_table.id = 100`
+2. Queries: `SELECT * FROM parent_table WHERE id = 100`
+3. Fetches parent row and its dependencies
 4. Generates complete seeder
 
 **Generated SQL:**
 ```sql
 -- Dependencies fetched automatically
-INSERT INTO merchants (...) VALUES (...) ON CONFLICT (pk) DO NOTHING;
+INSERT INTO parent_table (...) VALUES (...) ON CONFLICT (id) DO NOTHING;
 INSERT INTO main_table (...) VALUES (...) ON CONFLICT (id) DO NOTHING;
 ```
 
