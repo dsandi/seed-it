@@ -116,7 +116,7 @@ export async function generateCommand(options: any) {
         // Process each database
         for (let i = 0; i < dbConfigs.length; i++) {
             const dbConfig = dbConfigs[i];
-            const dbName = dbConfig.database;
+            const dbName = dbConfig.name;  // Fixed: was dbConfig.database, should be dbConfig.name
 
             console.log(chalk.cyan(`\n${'='.repeat(60)}`));
             console.log(chalk.cyan(`Processing database: ${dbName} (${i + 1}/${dbConfigs.length})`));
