@@ -337,8 +337,17 @@ export class SeederGenerator {
                         fetchQuery = `SELECT * FROM ${table} WHERE ${conditions}`;
                         fetchValues = availableColumns.map(col => row[col]);
 
-                        // Check if this is a join table with composite keys (multiple FKs, no PK)
-                        const isJoinTable = schema.primaryKeys.length === 0 && schema.foreignKeys.length >= 2;
+                        // Check if this is a join table with composite keys
+                        // A join table either has:
+                        // 1. No PK and multiple FKs, OR
+                        // 2. A composite PK where all PK columns are also FK columns
+                        const fkColumns = new Set(schema.foreignKeys.map(fk => fk.columnName));
+                        const pkColumnsAreFks = schema.primaryKeys.length > 0 &&
+                            schema.primaryKeys.every(pk => fkColumns.has(pk));
+                        const isJoinTable = (schema.primaryKeys.length === 0 && schema.foreignKeys.length >= 2) ||
+                            (pkColumnsAreFks && schema.foreignKeys.length >= 2);
+
+                        // Check if we're using a partial key (missing some FK columns)
                         const usingPartialKey = isJoinTable && availableColumns.length < schema.foreignKeys.length;
 
                         if (usingPartialKey) {
